@@ -54,8 +54,9 @@ static unsigned int uart_get_recv_cnt(void);
 
 #if 1
 static xQueueHandle gpio_evt_queue = NULL;
-static unsigned char s_locater_uart_recv_buff[1024] = {0};
+static unsigned char s_locater_uart_recv_buff[2048] = {0};
 static unsigned int s_locater_uart_recv_count = 0;
+static pthread_mutex_t s_locater_uart_data_mutex;
 
 
 static void IRAM_ATTR gpio_isr_handler(void* arg)
@@ -173,33 +174,53 @@ int sendData(const char* logName, const char* data)
 
 static void tx_task(void *arg)
 {
-    int ret = 0;
+    int ret = 0, i = 0;
     char *p_atcmd = NULL;
     static const char *TX_TASK_TAG = "TX_TASK";
+    unsigned int timeout = 0;
 
     esp_log_level_set(TX_TASK_TAG, ESP_LOG_INFO);
 
 #if 0
     vTaskDelay(15000 / portTICK_PERIOD_MS);
 #else
-    vTaskDelay(55000 / portTICK_PERIOD_MS);
-
+    vTaskDelay(5000 / portTICK_PERIOD_MS);
     while (1) {
-        printf("// check SIMCOMATI\n");
+        while (1) {
+        printf("// check SIMCOMATI %d\n", i++);
         uart_set_buff_clean();
         p_atcmd = "AT+SIMCOMATI\r\n";
         uart_write_bytes(UART_NUM_1, p_atcmd, strlen(p_atcmd));
+        timeout = 100;
         while (1) {
+            vTaskDelay(10 / portTICK_PERIOD_MS);
             ret = uart_get_recv_cnt();
-            if (ret) {
+            if (!ret)
+                continue;
+            else if (s_locater_uart_recv_count > 4 && \
+                    s_locater_uart_recv_buff[s_locater_uart_recv_count - 4] == 'O'  && \
+                    s_locater_uart_recv_buff[s_locater_uart_recv_count - 3] == 'K'  && \
+                    s_locater_uart_recv_buff[s_locater_uart_recv_count - 2] == '\r' && \
+                    s_locater_uart_recv_buff[s_locater_uart_recv_count - 1] == '\n')
+            {
+                /*
+                *  认为一个完整的AT回复是最后有一个OK的字符串，
+                *  否则继续等待！
+                */
                 printf("wait atcmd done: %s\n", p_atcmd);
                 break;
             }
-            vTaskDelay(15000 / portTICK_PERIOD_MS);
+            
+            timeout--;
+            if (!timeout) {
+                printf("wait timeout\n");
+                break;
+            }
         }
-        printf("rx:\n");
+        printf("rx(%d):\n", strlen((const char *)s_locater_uart_recv_buff));
         printf("%s\n", s_locater_uart_recv_buff);
         printf("\n\n");
+        }
 
         // Access to MQTT server not SSL/TLS
         uart_set_buff_clean();
@@ -323,7 +344,9 @@ static void tx_task(void *arg)
 
 static void uart_set_buff_clean(void)
 {
+    pthread_mutex_lock(&s_locater_uart_data_mutex);
     s_locater_uart_recv_count = 0;
+    pthread_mutex_unlock(&s_locater_uart_data_mutex);
 }
 
 static unsigned int uart_get_recv_cnt(void)
@@ -335,20 +358,27 @@ static void rx_task(void *arg)
 {
     int rx_bytes = 0, rx_final = 0;
     unsigned int remain = 0;
+    unsigned char buff[1024] = {0};
 
     esp_log_level_set(RX_TASK_TAG, ESP_LOG_INFO);
     while (1) {
-        rx_bytes = uart_read_bytes(UART_NUM_1, \
-                s_locater_uart_recv_buff + s_locater_uart_recv_count, \
-                sizeof(s_locater_uart_recv_buff) - s_locater_uart_recv_count, 1000 / portTICK_RATE_MS);
+        rx_bytes = uart_read_bytes(UART_NUM_1, buff, sizeof(buff), 10 / portTICK_RATE_MS);
+        /*
+        *  一直接收串口数据，在Buff缓冲大小之内一直接收。
+        */
         if (rx_bytes > 0 && \
                 s_locater_uart_recv_count < (sizeof(s_locater_uart_recv_buff) - 1))
         {
-            remain = sizeof(s_locater_uart_recv_buff) - s_locater_uart_recv_count;
+            pthread_mutex_lock(&s_locater_uart_data_mutex);
+            remain = (sizeof(s_locater_uart_recv_buff) - 1) - s_locater_uart_recv_count;
             rx_final = rx_bytes > remain ? remain : rx_bytes;
+            memcpy(s_locater_uart_recv_buff + s_locater_uart_recv_count, buff, rx_final);
             s_locater_uart_recv_count += rx_final;
             s_locater_uart_recv_buff[s_locater_uart_recv_count] = 0;
+            pthread_mutex_unlock(&s_locater_uart_data_mutex);
         }
+
+        vTaskDelay(10 / portTICK_PERIOD_MS);
     }
 }
 
@@ -374,6 +404,11 @@ void uart_4g_init(void)
 
 void uart_4g_main(void)
 {
+    int ret = 0;
+    
+    ret = pthread_mutex_init(&s_locater_uart_data_mutex, 0);
+    printf("pthread_mutex_init init ret: %d\r\n", ret);
+
     xTaskCreate(rx_task, "uart_rx_task", 1024*2, NULL, configMAX_PRIORITIES, NULL);
     xTaskCreate(tx_task, "uart_tx_task", 1024*2, NULL, configMAX_PRIORITIES-1, NULL);
 }
