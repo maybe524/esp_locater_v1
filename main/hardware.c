@@ -172,6 +172,66 @@ int sendData(const char* logName, const char* data)
     return txBytes;
 }
 
+/**
+ * @brief 
+ * 
+ */
+static int locater_uart_send_atcmd_2_4g_module(char *p_at_cmd_str, \
+        unsigned char *p_result_buff, unsigned int result_buff_size, unsigned int timeout)
+{
+    bool is_recv_fail = false;
+    unsigned int recv_byte = 0, final_copy_byte = 0;
+    unsigned char *p_uart_buff_head = s_locater_uart_recv_buff;
+
+    if (!p_at_cmd_str || !p_result_buff || \
+            !result_buff_size || !timeout)
+    {
+        printf("check argv is invalid\n");
+        return -1;
+    }
+
+    uart_set_buff_clean();
+    uart_write_bytes(UART_NUM_1, p_at_cmd_str, strlen(p_at_cmd_str));
+    while (1) {
+        vTaskDelay(10 / portTICK_PERIOD_MS);
+        recv_byte = uart_get_recv_cnt();
+        if (!recv_byte)
+            continue;
+        else if ((recv_byte > 4 && \
+                p_uart_buff_head[recv_byte - 4] == 'O'  && \
+                p_uart_buff_head[recv_byte - 3] == 'K'  && \
+                p_uart_buff_head[recv_byte - 2] == '\r' && \
+                p_uart_buff_head[recv_byte - 1] == '\n') || \
+            (recv_byte > 2 && 
+                p_uart_buff_head[recv_byte - 2] == '\r' && \
+                p_uart_buff_head[recv_byte - 1] == '\n'))
+        {
+            /*
+            *  认为一个完整的AT回复是最后有一个OK的字符串，
+            *  否则继续等待！
+            */
+            printf("wait atcmd done: %s\n", p_at_cmd_str);
+            break;
+        }
+
+        timeout--;
+        if (!timeout) {
+            printf("wait timeout\n");
+            is_recv_fail = true;
+            break;
+        }
+    }
+    
+    final_copy_byte = recv_byte > result_buff_size ? result_buff_size : recv_byte;
+    memcpy(p_result_buff, p_uart_buff_head, final_copy_byte);
+    printf("rx(%d):\n", recv_byte);
+    printf("%s\n", p_uart_buff_head);
+    printf("\n\n");
+
+    return final_copy_byte;
+}
+
+static unsigned char buff[1024];
 static void tx_task(void *arg)
 {
     int ret = 0, i = 0;
@@ -181,161 +241,59 @@ static void tx_task(void *arg)
 
     esp_log_level_set(TX_TASK_TAG, ESP_LOG_INFO);
 
-#if 0
-    vTaskDelay(15000 / portTICK_PERIOD_MS);
-#else
     vTaskDelay(5000 / portTICK_PERIOD_MS);
+    // while (1) {
+    // printf("// check CPIN\n");
+    // uart_set_buff_clean();
+    // p_atcmd = "AT+CPIN?\r\n";
+    // uart_write_bytes(UART_NUM_1, p_atcmd, strlen(p_atcmd));
+    // while (1) {
+    //     ret = uart_get_recv_cnt();
+    //     if (ret) {
+    //         printf("wait atcmd done: %s\n", p_atcmd);
+    //         break;
+    //     }
+    //     vTaskDelay(15000 / portTICK_PERIOD_MS);
+    // }
+    // printf("rx:\n");
+    // printf("%s\n", s_locater_uart_recv_buff);
+    // printf("\n\n");
+    // }
+    
+    printf("// check SIMCOMATI %d\n", i++);
+    p_atcmd = "AT+SIMCOMATI\r\n";
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 1000);
+
+    // Access to MQTT server not SSL/TLS
+    // p_atcmd = "ATE0\r\n";
+    // ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff));
+
+    printf("// check CPIN\n");
+    p_atcmd = "AT+CPIN?\r\n";
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 1000);
+
+    printf("// start MQTT service, activate PDP context\n");
+    p_atcmd = "AT+CMQTTSTART\r\n";
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 10000000);
     while (1) {
-        while (1) {
-        printf("// check SIMCOMATI %d\n", i++);
-        uart_set_buff_clean();
-        p_atcmd = "AT+SIMCOMATI\r\n";
-        uart_write_bytes(UART_NUM_1, p_atcmd, strlen(p_atcmd));
-        timeout = 100;
-        while (1) {
-            vTaskDelay(10 / portTICK_PERIOD_MS);
-            ret = uart_get_recv_cnt();
-            if (!ret)
-                continue;
-            else if (s_locater_uart_recv_count > 4 && \
-                    s_locater_uart_recv_buff[s_locater_uart_recv_count - 4] == 'O'  && \
-                    s_locater_uart_recv_buff[s_locater_uart_recv_count - 3] == 'K'  && \
-                    s_locater_uart_recv_buff[s_locater_uart_recv_count - 2] == '\r' && \
-                    s_locater_uart_recv_buff[s_locater_uart_recv_count - 1] == '\n')
-            {
-                /*
-                *  认为一个完整的AT回复是最后有一个OK的字符串，
-                *  否则继续等待！
-                */
-                printf("wait atcmd done: %s\n", p_atcmd);
-                break;
-            }
-            
-            timeout--;
-            if (!timeout) {
-                printf("wait timeout\n");
-                break;
-            }
-        }
-        printf("rx(%d):\n", strlen((const char *)s_locater_uart_recv_buff));
-        printf("%s\n", s_locater_uart_recv_buff);
-        printf("\n\n");
-        }
-
-        // Access to MQTT server not SSL/TLS
-        uart_set_buff_clean();
-        p_atcmd = "ATE0\r\n";
-        uart_write_bytes(UART_NUM_1, p_atcmd, strlen(p_atcmd));
-        while (1) {
-            ret = uart_get_recv_cnt();
-            if (ret) {
-                printf("wait atcmd done: %s\n", p_atcmd);
-                break;
-            }
-            vTaskDelay(15000 / portTICK_PERIOD_MS);
-        }
-        printf("rx:\n");
-        printf("%s\n", s_locater_uart_recv_buff);
-        printf("\n\n");
-
-        printf("// check CPIN\n");
-        uart_set_buff_clean();
-        p_atcmd = "AT+CPIN?\r\n";
-        uart_write_bytes(UART_NUM_1, p_atcmd, strlen(p_atcmd));
-        while (1) {
-            ret = uart_get_recv_cnt();
-            if (ret) {
-                printf("wait atcmd done: %s\n", p_atcmd);
-                break;
-            }
-            vTaskDelay(15000 / portTICK_PERIOD_MS);
-        }
-        printf("rx:\n");
-        printf("%s\n", s_locater_uart_recv_buff);
-        printf("\n\n");
-
-        printf("// start MQTT service, activate PDP context\n");
-        uart_set_buff_clean();
-        p_atcmd = "AT+CMQTTSTART\r\n";
-        uart_write_bytes(UART_NUM_1, p_atcmd, strlen(p_atcmd));
-        while (1) {
-            ret = uart_get_recv_cnt();
-            if (ret) {
-                printf("wait atcmd done: %s\n", p_atcmd);
-                break;
-            }
-            vTaskDelay(15000 / portTICK_PERIOD_MS);
-        }
-        printf("rx:\n");
-        printf("%s\n", s_locater_uart_recv_buff);
-        printf("\n\n");
-
-        printf("// Acquire one client which will connect to a MQTT server not SSL/TLS\n");
-        uart_set_buff_clean();
-        p_atcmd = "AT+CMQTTACCQ=0,\"client test0\"";
-        uart_write_bytes(UART_NUM_1, p_atcmd, strlen(p_atcmd));
-        while (1) {
-            ret = uart_get_recv_cnt();
-            if (ret) {
-                printf("wait atcmd done: %s\n", p_atcmd);
-                break;
-            }
-            vTaskDelay(15000 / portTICK_PERIOD_MS);
-        }
-        printf("rx:\n");
-        printf("%s\n", s_locater_uart_recv_buff);
-        printf("\n\n");
-
-        printf("// Set the will topic for the CONNECT message\n");
-        uart_set_buff_clean();
-        p_atcmd = "AT+CMQTTWILLTOPIC=0,10";
-        uart_write_bytes(UART_NUM_1, p_atcmd, strlen(p_atcmd));
-        while (1) {
-            ret = uart_get_recv_cnt();
-            if (ret) {
-                printf("wait atcmd done: %s\n", p_atcmd);
-                break;
-            }
-            vTaskDelay(15000 / portTICK_PERIOD_MS);
-        }
-        printf("rx:\n");
-        printf("%s\n", s_locater_uart_recv_buff);
-        printf("\n\n");
-
-        printf("// Set the will message for the CONNECT message\n");
-        uart_set_buff_clean();
-        p_atcmd = "AT+CMQTTWILLMSG=0,6,1";
-        uart_write_bytes(UART_NUM_1, p_atcmd, strlen(p_atcmd));
-        while (1) {
-            ret = uart_get_recv_cnt();
-            if (ret) {
-                printf("wait atcmd done: %s\n", p_atcmd);
-                break;
-            }
-            vTaskDelay(15000 / portTICK_PERIOD_MS);
-        }
-        printf("rx:\n");
-        printf("%s\n", s_locater_uart_recv_buff);
-        printf("\n\n");
-
-        printf("// Connect to a MQTT server\n");
-        uart_set_buff_clean();
-        p_atcmd = "AT+CMQTTCONNECT=0,\"tcp://1.117.221.12:1883\",60,1,\"ABCABCABC\",\"ABCABCABC\"\r";
-        uart_write_bytes(UART_NUM_1, p_atcmd, strlen(p_atcmd));
-        while (1) {
-            ret = uart_get_recv_cnt();
-            if (ret) {
-                printf("wait atcmd done: %s\n", p_atcmd);
-                break;
-            }
-            vTaskDelay(15000 / portTICK_PERIOD_MS);
-        }
-        printf("rx:\n");
-        printf("%s\n", s_locater_uart_recv_buff);
-        printf("\n\n");
+        vTaskDelay(2000 / portTICK_PERIOD_MS);
     }
 
-#endif
+    printf("// Acquire one client which will connect to a MQTT server not SSL/TLS\n");
+    p_atcmd = "AT+CMQTTACCQ=0,\"client test0\"";
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 100000);
+
+    printf("// Set the will topic for the CONNECT message\n");
+    p_atcmd = "AT+CMQTTWILLTOPIC=0,10";
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 100000);
+
+    printf("// Set the will message for the CONNECT message\n");
+    p_atcmd = "AT+CMQTTWILLMSG=0,6,1";
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 100000);
+
+    printf("// Connect to a MQTT server\n");
+    p_atcmd = "AT+CMQTTCONNECT=0,\"tcp://1.117.221.12:1883\",60,1,\"ABCABCABC\",\"ABCABCABC\"\r";
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 100000);
 
     while (1) {
         vTaskDelay(2000 / portTICK_PERIOD_MS);
