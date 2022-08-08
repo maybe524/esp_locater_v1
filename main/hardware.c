@@ -472,7 +472,19 @@ static void locater_uart_send_atcmd_2_4g_module_utils_print(char *p)
 {
     bool is_need_printf_n = false;
 
-    while (1) {
+    /*
+    *  去掉字符串首的回车换行符
+    */
+    while (true) {
+        if (!(*p) || (*p != '\r' && *p != '\n'))
+            break;
+        p++;
+    }
+
+    /*
+    *  去掉多个回车换行符，只保留其中一个回车换行符，并且打印
+    */
+    while (true) {
         if (!(*p))
             break;
         else if ((*p) == '\r' || (*p) == '\n') {
@@ -530,8 +542,7 @@ static int locater_uart_send_atcmd_2_4g_module(char *p_at_cmd_str, char *p_resul
         recv_byte = uart_get_recv_cnt();
         timeout--;
         if (!timeout) {
-            printf("atcmd_2_4g_modulce, wait atres timeout: ");
-            locater_uart_send_atcmd_2_4g_module_utils_print(p_at_cmd_str);
+            printf("atcmd_2_4g_modulce, wait atres timeout\n");
             is_recv_fail = true;
             break;
         }
@@ -550,8 +561,7 @@ static int locater_uart_send_atcmd_2_4g_module(char *p_at_cmd_str, char *p_resul
             *  认为一个完整的AT回复是最后有一个OK的字符串，
             *  否则继续等待！
             */
-            printf("atcmd_2_4g_module, wait atcmd done: ");
-            locater_uart_send_atcmd_2_4g_module_utils_print(p_at_cmd_str);
+            printf("atcmd_2_4g_module, wait atcmd done\n");
             break;
         }
     }
@@ -559,10 +569,12 @@ static int locater_uart_send_atcmd_2_4g_module(char *p_at_cmd_str, char *p_resul
     final_copy_byte = recv_byte > result_buff_size ? result_buff_size : recv_byte;
     memcpy(p_result_buff, p_uart_buff_head, final_copy_byte);
     uart_buff_head_len = strlen(p_uart_buff_head);
-    printf("----------------------\n");
+    printf("/----------------------\n");
+    printf("tx %d byte:\n", strlen(p_at_cmd_str));
+    locater_uart_send_atcmd_2_4g_module_utils_print(p_at_cmd_str);
     printf("rx %d byte:\n", recv_byte);
     locater_uart_send_atcmd_2_4g_module_utils_print(p_uart_buff_head);
-    printf("----------------------\n");
+    printf("----------------------/\n");
     printf("\n");
 
     return final_copy_byte;
@@ -1414,7 +1426,7 @@ static int locater_uart_set_mqtt_subtopic(void)
         if (strncmp("OK", s_locater_atres_array[i].atreq_content, 13))
             continue;
         
-        printf("mqtt_subtopic, input topic result is ok\n");
+        printf("mqtt_subtopic, input content result is ok\n");
         ret = 0;
         break;
     }
@@ -1424,6 +1436,500 @@ static int locater_uart_set_mqtt_subtopic(void)
     }
 
     printf("mqtt_subtopic, done\n");
+
+    return ret;
+}
+
+/**
+ * @brief AT+CMQTTSUB=0,14,1			///< 查询是否有这个主题
+ * 
+ * @return int 
+ */
+static int locater_uart_set_mqtt_sub(void)
+{
+    int ret;
+    int i = 0, j = 0;
+    char *p_atcmd = NULL;
+    int at_res_line = 0;
+    int split_count = 0;
+    char at_cmd_buf[64] = {0};
+    unsigned int err = 0;
+    unsigned int client = 0;
+    unsigned int connect_err = 0;
+    unsigned int recv_cnt = 0;
+
+    ///< 1.1　上线订阅主题：订阅主题为SERIAL/#，QoS=1，Retain=0。
+    ///< AT+CMQTTSUBTOPIC=0,11,1		///< 参数依次含义：client_0, 11个字节，QoS=1
+    ///< > AzRxBWxbZ/#	
+
+    p_atcmd = "AT+CMQTTSUB=0,14,1\r\n";
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 1000, 0);
+    if (ret < 0) {
+        printf("mqtt_sub, failed\n");
+        return ret;
+    }
+    recv_cnt = ret;
+    at_res_line = locater_uart_process_at_response(buff, s_locater_atres_array, 32);
+
+    /*
+    * Response
+    *  <
+    */
+    ret = -2;
+    for (i = 0; i < at_res_line; i++) {
+        printf("mqtt_sub, line_%02d, len_%02d: %s\n", i, strlen(s_locater_atres_array[i].atreq_content), \
+            s_locater_atres_array[i].atreq_content);
+
+        if (strncmp(">", s_locater_atres_array[i].atreq_content, 1))
+            continue;
+        
+        printf("mqtt_sub, wait input comunication ok\n");
+        ret = 0;
+        break;
+    }
+    if (ret) {
+        printf("mqtt_sub, result is error\n");
+        return ret;
+    }
+
+    ///< 订阅主题
+    sprintf(at_cmd_buf, "%sD/0/0\r\n", s_locater_device_serial_buff);
+    ret = locater_uart_send_atcmd_2_4g_module(at_cmd_buf, buff, sizeof(buff), 1000, 0);
+    at_res_line = locater_uart_process_at_response(buff, s_locater_atres_array, 32);
+    ret = -2;
+    for (i = 0; i < at_res_line; i++) {
+        printf("mqtt_sub, line_%02d, len_%02d: %s\n", i, strlen(s_locater_atres_array[i].atreq_content), \
+            s_locater_atres_array[i].atreq_content);
+
+        if (strncmp("OK", s_locater_atres_array[i].atreq_content, 13))
+            continue;
+        
+        printf("mqtt_sub, input content result is ok\n");
+        ret = 0;
+        break;
+    }
+    if (ret) {
+        printf("mqtt_sub, result is fail\n");
+        return ret;
+    }
+
+    printf("mqtt_sub, done\n");
+
+    return ret;
+}
+
+
+/**
+ * @brief AT+CMQTTTOPIC=0,14			///< 订阅主题
+ * 
+ * @return int 
+ */
+static int locater_uart_set_mqtt_topic(void)
+{
+    int ret;
+    int i = 0, j = 0;
+    char *p_atcmd = NULL;
+    int at_res_line = 0;
+    int split_count = 0;
+    char at_cmd_buf[64] = {0};
+    unsigned int err = 0;
+    unsigned int client = 0;
+    unsigned int connect_err = 0;
+    unsigned int recv_cnt = 0;
+
+    ///< 1.1　上线订阅主题：订阅主题为SERIAL/#，QoS=1，Retain=0。
+    ///< AT+CMQTTSUBTOPIC=0,11,1		///< 参数依次含义：client_0, 11个字节，QoS=1
+    ///< > AzRxBWxbZ/#	
+
+    p_atcmd = "AT+CMQTTSUB=0,14,1\r\n";
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 1000, 0);
+    if (ret < 0) {
+        printf("mqtt_topic, failed\n");
+        return ret;
+    }
+    recv_cnt = ret;
+    at_res_line = locater_uart_process_at_response(buff, s_locater_atres_array, 32);
+
+    /*
+    * Response
+    *  <
+    */
+    ret = -2;
+    for (i = 0; i < at_res_line; i++) {
+        printf("mqtt_topic, line_%02d, len_%02d: %s\n", i, strlen(s_locater_atres_array[i].atreq_content), \
+            s_locater_atres_array[i].atreq_content);
+
+        if (strncmp(">", s_locater_atres_array[i].atreq_content, 1))
+            continue;
+        
+        printf("mqtt_topic, wait input comunication ok\n");
+        ret = 0;
+        break;
+    }
+    if (ret) {
+        printf("mqtt_topic, result is error\n");
+        return ret;
+    }
+
+    ///< 订阅主题
+    sprintf(at_cmd_buf, "%sD/0/0\r\n", s_locater_device_serial_buff);
+    ret = locater_uart_send_atcmd_2_4g_module(at_cmd_buf, buff, sizeof(buff), 1000, 0);
+    at_res_line = locater_uart_process_at_response(buff, s_locater_atres_array, 32);
+    ret = -2;
+    for (i = 0; i < at_res_line; i++) {
+        printf("mqtt_topic, line_%02d, len_%02d: %s\n", i, strlen(s_locater_atres_array[i].atreq_content), \
+            s_locater_atres_array[i].atreq_content);
+
+        if (strncmp("OK", s_locater_atres_array[i].atreq_content, 13))
+            continue;
+        
+        printf("mqtt_topic, input content result is ok\n");
+        ret = 0;
+        break;
+    }
+    if (ret) {
+        printf("mqtt_topic, result is fail\n");
+        return ret;
+    }
+
+    printf("mqtt_topic, done\n");
+
+    return ret;
+}
+
+
+/**
+ * @brief AT+CMQTTPAYLOAD=0,1			///< Payload=‘1’
+ * 
+ * @return int 
+ */
+static int locater_uart_set_mqtt_payload(void)
+{
+    int ret;
+    int i = 0, j = 0;
+    char *p_atcmd = NULL;
+    int at_res_line = 0;
+    int split_count = 0;
+    char at_cmd_buf[64] = {0};
+    unsigned int err = 0;
+    unsigned int client = 0;
+    unsigned int connect_err = 0;
+    unsigned int recv_cnt = 0;
+
+    ///< 1.1　上线订阅主题：订阅主题为SERIAL/#，QoS=1，Retain=0。
+    ///< AT+CMQTTSUBTOPIC=0,11,1		///< 参数依次含义：client_0, 11个字节，QoS=1
+    ///< > AzRxBWxbZ/#	
+
+    p_atcmd = "AT+CMQTTPAYLOAD=0,1\r\n";
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 1000, 0);
+    if (ret < 0) {
+        printf("mqtt_payload, failed\n");
+        return ret;
+    }
+    recv_cnt = ret;
+    at_res_line = locater_uart_process_at_response(buff, s_locater_atres_array, 32);
+
+    /*
+    * Response
+    *  <
+    */
+    ret = -2;
+    for (i = 0; i < at_res_line; i++) {
+        printf("mqtt_payload, line_%02d, len_%02d: %s\n", i, strlen(s_locater_atres_array[i].atreq_content), \
+            s_locater_atres_array[i].atreq_content);
+
+        if (strncmp(">", s_locater_atres_array[i].atreq_content, 1))
+            continue;
+        
+        printf("mqtt_payload, wait input comunication ok\n");
+        ret = 0;
+        break;
+    }
+    if (ret) {
+        printf("mqtt_payload, result is error\n");
+        return ret;
+    }
+
+    ///< 订阅主题
+    sprintf(at_cmd_buf, "1\r\n", s_locater_device_serial_buff);
+    ret = locater_uart_send_atcmd_2_4g_module(at_cmd_buf, buff, sizeof(buff), 1000, 0);
+    at_res_line = locater_uart_process_at_response(buff, s_locater_atres_array, 32);
+    ret = -2;
+    for (i = 0; i < at_res_line; i++) {
+        printf("mqtt_payload, line_%02d, len_%02d: %s\n", i, strlen(s_locater_atres_array[i].atreq_content), \
+            s_locater_atres_array[i].atreq_content);
+
+        if (strncmp("OK", s_locater_atres_array[i].atreq_content, 13))
+            continue;
+        
+        printf("mqtt_payload, input content result is ok\n");
+        ret = 0;
+        break;
+    }
+    if (ret) {
+        printf("mqtt_payload, result is fail\n");
+        return ret;
+    }
+
+    printf("mqtt_payload, done\n");
+
+    return ret;
+}
+
+
+/**
+ * @brief AT+CMQTTPUB=0,1,60,1
+ *      参数依次含义：client_0, QoS=1, pub_timeout=60, Retain=1
+ * 
+ * @return int 
+ */
+static int locater_uart_set_mqtt_pub(void)
+{
+    int ret;
+    int i = 0, j = 0;
+    char *p_atcmd = NULL;
+    int at_res_line = 0;
+    int split_count = 0;
+    char at_cmd_buf[64] = {0};
+    unsigned int err = 0;
+    unsigned int client = 0;
+    unsigned int connect_err = 0;
+    unsigned int recv_cnt = 0;
+
+    ///< 1.1　上线订阅主题：订阅主题为SERIAL/#，QoS=1，Retain=0。
+    ///< AT+CMQTTSUBTOPIC=0,11,1		///< 参数依次含义：client_0, 11个字节，QoS=1
+    ///< > AzRxBWxbZ/#	
+
+    p_atcmd = "AT+CMQTTPUB=0,1,60,1\r\n";
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 1000, 0);
+    if (ret < 0) {
+        printf("mqtt_pub, failed\n");
+        return ret;
+    }
+
+    at_res_line = locater_uart_process_at_response(buff, s_locater_atres_array, 32);
+    ret = -2;
+    for (i = 0; i < at_res_line; i++) {
+        printf("mqtt_pub, line_%02d, len_%02d: %s\n", i, strlen(s_locater_atres_array[i].atreq_content), \
+            s_locater_atres_array[i].atreq_content);
+
+        if (strncmp("OK", s_locater_atres_array[i].atreq_content, 13))
+            continue;
+        
+        printf("mqtt_pub, input content result is ok\n");
+        ret = 0;
+        break;
+    }
+    if (ret) {
+        printf("mqtt_pub, result is fail\n");
+        return ret;
+    }
+
+    printf("mqtt_pub, done\n");
+
+    return ret;
+}
+
+/**
+ * @brief AT+CMQTTSUB=0，订阅设置好的主题的消息
+ * 
+ * @return int 
+ */
+static int locater_uart_set_mqtt_sub_confirm(void)
+{
+    int ret;
+    int i = 0, j = 0;
+    char *p_atcmd = NULL;
+    int at_res_line = 0;
+    int split_count = 0;
+    char at_cmd_buf[64] = {0};
+    unsigned int err = 0;
+    unsigned int client = 0;
+    unsigned int connect_err = 0;
+    unsigned int recv_cnt = 0;
+
+    ///< 1.1　上线订阅主题：订阅主题为SERIAL/#，QoS=1，Retain=0。
+    ///< AT+CMQTTSUBTOPIC=0,11,1		///< 参数依次含义：client_0, 11个字节，QoS=1
+    ///< > AzRxBWxbZ/#	
+
+    p_atcmd = "AT+CMQTTSUB=0\r\n";
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 1000, 0);
+    if (ret < 0) {
+        printf("mqtt_sub_confirm, failed\n");
+        return ret;
+    }
+    recv_cnt = ret;
+    at_res_line = locater_uart_process_at_response(buff, s_locater_atres_array, 32);
+
+    /*
+    * Response
+    *  <
+    */
+    ret = -2;
+    for (i = 0; i < at_res_line; i++) {
+        printf("mqtt_sub_confirm, line_%02d, len_%02d: %s\n", i, strlen(s_locater_atres_array[i].atreq_content), \
+            s_locater_atres_array[i].atreq_content);
+
+        if (strncmp("OK", s_locater_atres_array[i].atreq_content, 2))
+            continue;
+        
+        ret = 0;
+        break;
+    }
+    if (ret) {
+        printf("mqtt_sub_confirm, result is error\n");
+        return ret;
+    }
+
+    printf("mqtt_sub_confirm, done\n");
+
+    return ret;
+}
+
+
+static int locater_uart_set_mqtt_willtopic(void)
+{
+    int ret;
+    int i = 0, j = 0;
+    char *p_atcmd = NULL;
+    int at_res_line = 0;
+    int split_count = 0;
+    char at_cmd_buf[64] = {0};
+    unsigned int err = 0;
+    unsigned int client = 0;
+    unsigned int connect_err = 0;
+    unsigned int recv_cnt = 0;
+
+    ///< 1.1　上线订阅主题：订阅主题为SERIAL/#，QoS=1，Retain=0。
+    ///< AT+CMQTTSUBTOPIC=0,11,1		///< 参数依次含义：client_0, 11个字节，QoS=1
+    ///< > AzRxBWxbZ/#	
+
+    p_atcmd = "AT+CMQTTWILLTOPIC=0,15\r\n";
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 1000, 0);
+    if (ret < 0) {
+        printf("mqtt_willtopic, failed\n");
+        return ret;
+    }
+    recv_cnt = ret;
+    at_res_line = locater_uart_process_at_response(buff, s_locater_atres_array, 32);
+
+    /*
+    * Response
+    *  <
+    */
+    ret = -2;
+    for (i = 0; i < at_res_line; i++) {
+        printf("mqtt_willtopic, line_%02d, len_%02d: %s\n", i, strlen(s_locater_atres_array[i].atreq_content), \
+            s_locater_atres_array[i].atreq_content);
+
+        if (strncmp(">", s_locater_atres_array[i].atreq_content, 1))
+            continue;
+        
+        printf("mqtt_willtopic, wait input comunication ok\n");
+        ret = 0;
+        break;
+    }
+    if (ret) {
+        printf("mqtt_willtopic, result is error\n");
+        return ret;
+    }
+
+    ///< 订阅主题
+    sprintf(at_cmd_buf, "%sD/0/0\r\n", s_locater_device_serial_buff);
+    ret = locater_uart_send_atcmd_2_4g_module(at_cmd_buf, buff, sizeof(buff), 1000, 0);
+    at_res_line = locater_uart_process_at_response(buff, s_locater_atres_array, 32);
+    ret = -2;
+    for (i = 0; i < at_res_line; i++) {
+        printf("mqtt_willtopic, line_%02d, len_%02d: %s\n", i, strlen(s_locater_atres_array[i].atreq_content), \
+            s_locater_atres_array[i].atreq_content);
+
+        if (strncmp("OK", s_locater_atres_array[i].atreq_content, 13))
+            continue;
+        
+        printf("mqtt_willtopic, input content result is ok\n");
+        ret = 0;
+        break;
+    }
+    if (ret) {
+        printf("mqtt_willtopic, result is fail\n");
+        return ret;
+    }
+
+    printf("mqtt_willtopic, done\n");
+
+    return ret;
+}
+
+
+static int locater_uart_set_mqtt_willmsg(void)
+{
+    int ret;
+    int i = 0, j = 0;
+    char *p_atcmd = NULL;
+    int at_res_line = 0;
+    int split_count = 0;
+    char at_cmd_buf[64] = {0};
+    unsigned int err = 0;
+    unsigned int client = 0;
+    unsigned int connect_err = 0;
+    unsigned int recv_cnt = 0;
+
+    ///< 1.1　上线订阅主题：订阅主题为SERIAL/#，QoS=1，Retain=0。
+    ///< AT+CMQTTSUBTOPIC=0,11,1		///< 参数依次含义：client_0, 11个字节，QoS=1
+    ///< > AzRxBWxbZ/#	
+
+    p_atcmd = "AT+CMQTTWILLMSG=0,1,1\r\n";
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 1000, 0);
+    if (ret < 0) {
+        printf("mqtt_willmsg, failed\n");
+        return ret;
+    }
+    recv_cnt = ret;
+    at_res_line = locater_uart_process_at_response(buff, s_locater_atres_array, 32);
+
+    /*
+    * Response
+    *  <
+    */
+    ret = -2;
+    for (i = 0; i < at_res_line; i++) {
+        printf("mqtt_willmsg, line_%02d, len_%02d: %s\n", i, strlen(s_locater_atres_array[i].atreq_content), \
+            s_locater_atres_array[i].atreq_content);
+
+        if (strncmp(">", s_locater_atres_array[i].atreq_content, 1))
+            continue;
+        
+        printf("mqtt_willmsg, wait input comunication ok\n");
+        ret = 0;
+        break;
+    }
+    if (ret) {
+        printf("mqtt_willmsg, result is error\n");
+        return ret;
+    }
+
+    ///< 订阅主题
+    sprintf(at_cmd_buf, "0\r\n");
+    ret = locater_uart_send_atcmd_2_4g_module(at_cmd_buf, buff, sizeof(buff), 1000, 0);
+    at_res_line = locater_uart_process_at_response(buff, s_locater_atres_array, 32);
+    ret = -2;
+    for (i = 0; i < at_res_line; i++) {
+        printf("mqtt_willmsg, line_%02d, len_%02d: %s\n", i, strlen(s_locater_atres_array[i].atreq_content), \
+            s_locater_atres_array[i].atreq_content);
+
+        if (strncmp("OK", s_locater_atres_array[i].atreq_content, 13))
+            continue;
+        
+        printf("mqtt_willmsg, input content result is ok\n");
+        ret = 0;
+        break;
+    }
+    if (ret) {
+        printf("mqtt_willmsg, result is fail\n");
+        return ret;
+    }
+
+    printf("mqtt_willmsg, done\n");
 
     return ret;
 }
@@ -1503,19 +2009,8 @@ LOCATOR_STEP_ENTRY(1) {
             goto start_que;
         }
 
-        /*
-        *  CGACT激活网络
-        */
         printf("\r\n\r\n");
-        ret = locater_uart_set_cgact();
-        printf("cgact, detect set cgact ret: %d\n", ret);
-        if (ret) {
-            printf("cgact, retry!\n", ret);
-            goto start_que;
-        }
-
-        printf("\r\n\r\n");
-        retry_cnt = 50;
+        retry_cnt = 500;
 locater_uart_get_cgact_retry:
         ret = locater_uart_get_cgact(&s_locater_atres_cgact);
         printf("get_cgact, detect get cgact ret: %d\n", ret);
@@ -1527,6 +2022,17 @@ locater_uart_get_cgact_retry:
         }
         else if (ret && !retry_cnt) {
             printf("get_cgact, final fail after retry!\n", ret);
+            goto start_que;
+        }
+
+        /*
+        *  CGACT激活网络。AT+CGACT之前先查询一下，返回为1才执行CGACT
+        */
+        printf("\r\n\r\n");
+        ret = locater_uart_set_cgact();
+        printf("cgact, detect set cgact ret: %d\n", ret);
+        if (ret) {
+            printf("cgact, retry!\n", ret);
             goto start_que;
         }
 
@@ -1574,6 +2080,15 @@ locater_uart_get_cgact_retry:
         }
 
         ret = locater_uart_set_mqtt_subtopic();
+        ret = locater_uart_set_mqtt_sub_confirm();
+
+        ret = locater_uart_set_mqtt_willtopic();
+        ret = locater_uart_set_mqtt_willmsg();
+
+        ret = locater_uart_set_mqtt_sub();
+        ret = locater_uart_set_mqtt_topic();
+        ret = locater_uart_set_mqtt_payload();
+        ret = locater_uart_set_mqtt_pub();
 
         while (1) {
             vTaskDelay(1000 / portTICK_PERIOD_MS);
