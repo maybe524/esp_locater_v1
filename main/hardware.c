@@ -173,7 +173,7 @@ int sendData(const char* logName, const char* data)
 }
 
 #define LOCATER_MAX_AT_RESP_LEN (215)
-#define LOCATOR_STEP_ENTRY(s)   if (step == (s))
+#define LOCATOR_UART_STEP_ENTRY(s)   if (step == (s))
 // #define LOCATOR_DEBUG_MODE
 #define ARRAY_LEN(a)    (sizeof(a) / sizeof(a[0]))
 #define LOCATER_IMEI_SIZE   (15)
@@ -283,7 +283,8 @@ static struct locater_atres_cgatt_fmt_s s_locater_atres_cgatt = {0};
 static struct locater_atres_cereg_fmt_s s_locater_atres_cereg = {0};
 static struct locater_atres_cpsi_fmt_s s_locater_atres_cpsi = {0};
 static char s_locater_device_serial_buff[LOCATER_DEVICE_SERIAL_SIZE + 1] = {0};
-
+static bool s_is_locater_online = false;
+static unsigned int s_locater_temperature_threshold_high = 0, s_locater_temperature_threshold_low = 0;
 
 static unsigned int locater_check_flags_32(unsigned int *p_flags, unsigned int mask)
 {
@@ -1759,7 +1760,7 @@ static int locater_uart_set_mqtt_sub(int client_handle, char *p_topic_str, unsig
 
 
 /**
- * @brief AT+CMQTTTOPIC=0,14			///< 订阅主题
+ * @brief AT+CMQTTTOPIC=0,14			///< 指定发布主题
  * 
  * @return int 
  */
@@ -2177,10 +2178,7 @@ static int locater_uart_set_mqtt_willmsg(void)
     return ret;
 }
 
-
-static char s_locater_mqtt_topic_str_buf[256];
-
-static void locater_uart_set_mqtt_willmsg(void *arg)
+static void locater_uart_device_online_conf_task(void *arg)
 {
     int ret = 0, idx = 0, i = 0;
     char *p_atcmd = NULL;
@@ -2196,9 +2194,11 @@ static void locater_uart_set_mqtt_willmsg(void *arg)
 
 start_que:
     vTaskDelay(5000 / portTICK_PERIOD_MS);
-LOCATOR_STEP_ENTRY(0) {
+LOCATOR_UART_STEP_ENTRY(0) {
         printf("\n\n");
         printf("//////////////////%04d//////////////////\n", idx++);
+
+        s_is_locater_online = false;
         
         /*
         *  习惯性的输入回车换行
@@ -2216,7 +2216,7 @@ LOCATOR_STEP_ENTRY(0) {
         step++;
     }
 
-LOCATOR_STEP_ENTRY(1) {
+LOCATOR_UART_STEP_ENTRY(1) {
         /*
         *  检查SIM在位情况
         */
@@ -2306,7 +2306,9 @@ LOCATOR_STEP_ENTRY(1) {
             step++;
     }
 
-LOCATOR_STEP_ENTRY(2) {
+LOCATOR_UART_STEP_ENTRY(2) {
+        char mqtt_topic_str_buf[32] = {0};
+        char mqtt_payload_str_buf[32] = {0};
 
         /*
         *  启动MQTT
@@ -2360,11 +2362,20 @@ LOCATOR_STEP_ENTRY(2) {
         /*
         *  上线通知服务器
         */
+       sprintf(mqtt_topic_str_buf, "%sD/0/0", s_locater_device_serial_buff);
+       ret = locater_uart_set_mqtt_sub(client_handle, mqtt_topic_str_buf, 0);
+
+       ret = locater_uart_set_mqtt_topic(client_handle, mqtt_topic_str_buf, 0);
+
+       sprintf(mqtt_payload_str_buf, "%s", "1");
+       ret = locater_uart_set_mqtt_payload(client_handle, mqtt_payload_str_buf, 0);
+
        ret = locater_uart_set_mqtt_pub(client_handle, 0);
+       s_is_locater_online = true;
        step++;
     }
 
-LOCATOR_STEP_ENTRY(3) {
+LOCATOR_UART_STEP_ENTRY(3) {
         /*
         *  间隔几分钟检查一次网络
         */
@@ -2372,6 +2383,97 @@ LOCATOR_STEP_ENTRY(3) {
         step = 1;
         step_bakup = 3;
         goto start_que;
+    }
+}
+
+static unsigned int locater_uart_get_temperature(void)
+{
+    return 0;
+}
+
+static unsigned int locater_uart_get_collision(void)
+{
+    return 0;
+}
+
+static unsigned int locater_uart_get_battery_level(void)
+{
+    return 0;
+}
+
+static void locater_uart_misc_task(void *arg)
+{
+    int ret;
+    unsigned int step = 0;
+    unsigned int temperature = 0;
+    char mqtt_topic_str_buf[32] = {0};
+    char mqtt_payload_str_buf[32] = {0};
+    int client_handle = 0;
+    unsigned int collision_alarm = 0;
+    unsigned int battery_level = 0;
+    bool is_need_upload_service = false;
+
+LOCATOR_UART_STEP_ENTRY(0) {
+        if (s_is_locater_online)
+            step++;
+        else {
+            vTaskDelay(5000 / portTICK_PERIOD_MS);
+        }
+    }
+
+    /*
+    *  此步骤仅仅处理温度
+    */
+LOCATOR_UART_STEP_ENTRY(1) {
+        is_need_upload_service = false;
+        temperature = locater_uart_get_temperature();
+
+        if (temperature > s_locater_temperature_threshold_high) {
+            sprintf(mqtt_topic_str_buf, "%sD/%d/122", s_locater_device_serial_buff, 251);
+            is_need_upload_service = true;
+        }
+        else if (temperature < s_locater_temperature_threshold_low) {
+            sprintf(mqtt_topic_str_buf, "%sD/%d/222", s_locater_device_serial_buff, 251);
+            is_need_upload_service = true;
+        }
+
+        if (is_need_upload_service) {
+            ret = locater_uart_set_mqtt_sub(client_handle, mqtt_topic_str_buf, 0);
+            ret = locater_uart_set_mqtt_topic(client_handle, mqtt_topic_str_buf, 0);
+            sprintf(mqtt_payload_str_buf, "%s", "1");
+            ret = locater_uart_set_mqtt_payload(client_handle, mqtt_payload_str_buf, 0);
+            ret = locater_uart_set_mqtt_pub(client_handle, 0);
+        }
+
+        step++;
+    }
+
+    /*
+    *  此步骤仅仅处理碰撞预警
+    */
+LOCATOR_UART_STEP_ENTRY(2) {
+        collision_alarm = locater_uart_get_collision();
+        if (collision_alarm) {
+            sprintf(mqtt_topic_str_buf, "%sD/%d/42", s_locater_device_serial_buff, 188);
+            ret = locater_uart_set_mqtt_sub(client_handle, mqtt_topic_str_buf, 0);
+            ret = locater_uart_set_mqtt_topic(client_handle, mqtt_topic_str_buf, 0);
+            sprintf(mqtt_payload_str_buf, "%s", "1");
+            ret = locater_uart_set_mqtt_payload(client_handle, mqtt_payload_str_buf, 0);
+            ret = locater_uart_set_mqtt_pub(client_handle, 0);
+        }
+        step++;
+    }
+
+    /*
+    *  此步骤仅仅处理电池电量上报服务器
+    */
+LOCATOR_UART_STEP_ENTRY(3) {
+        is_need_upload_service = false;
+        battery_level = locater_uart_get_battery_level();
+        if (battery_level < 10) {
+            sprintf(mqtt_topic_str_buf, "%sD/%d/42", s_locater_device_serial_buff, 188);
+            is_need_upload_service = true;
+        }
     }
 }
 
@@ -2444,7 +2546,8 @@ void uart_4g_main(void)
     printf("pthread_mutex_init init ret: %d\r\n", ret);
 
     xTaskCreate(rx_task, "uart_rx_task", 1024*2, NULL, configMAX_PRIORITIES, NULL);
-    xTaskCreate(tx_task, "uart_tx_task", 1024*2, NULL, configMAX_PRIORITIES-1, NULL);
+    xTaskCreate(locater_uart_device_online_conf_task, "uart_tlocater_uart_device_online_conf_taskx_task", 1024*2, NULL, configMAX_PRIORITIES-1, NULL);
+    // xTaskCreate(locater_uart_misc_task, "locater_uart_misc_task", 1024*2, NULL, configMAX_PRIORITIES-1, NULL);
 }
 #endif
 
