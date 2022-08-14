@@ -1,4 +1,5 @@
 #include "../common_esp32.h"
+#include "../common/common.h"
 
 static void *example_thread(void * arg);
 
@@ -153,7 +154,14 @@ void message_handle()
 {
 	int restart_time = 0;
 	temp_init();
+	//read and write storage
+	int key_val = 123;
 
+	//wifi
+	nvs_init();
+	//wifi_init();
+
+	sys_ota();
 	while(1)
 	{
 		int slRecv = message_recv();
@@ -163,10 +171,15 @@ void message_handle()
 		{
 		case 1:
 		    //message_init();
-			//printf("temp sensor %f\r\n", temp_read());
-			//storage_read();
-			//restart_time++;
-			//storage_write(restart_time);
+
+			//read and write storage
+			//key_val++;
+			//printf("read key =%d\r\n", storage_read("key"));
+			//storage_write("key", key_val);
+
+			//wifi_scan();
+			//dpp_enrollee_init();
+
 			break;
 		case 2:
 			//message_alarm_report(); //6 message
@@ -255,9 +268,6 @@ void message_send_alarm_temp()
 {
 
 }
-
-
-
 
 //receive
 void message_receive_init()

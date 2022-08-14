@@ -5,77 +5,150 @@
 #include "driver/uart.h"
 #include "string.h"
 #include "driver/gpio.h"
+
+//temp sensor
+#include "driver/temp_sensor.h"
+
+//gpio
+#include <stdlib.h>
+#include "freertos/task.h"
+#include "freertos/queue.h"
+
+//i2c
+#include "driver/i2c.h"
+
+//adc
+#include <stdio.h>
+#include "sdkconfig.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
+#include "driver/adc.h"
+
+#define CONFIG_IDF_TARGET_ESP32C3 1
+
+#define TIMES              256
+#define GET_UNIT(x)        ((x>>3) & 0x1)
+
+#if CONFIG_IDF_TARGET_ESP32
+#define ADC_RESULT_BYTE     2
+#define ADC_CONV_LIMIT_EN   1                       //For ESP32, this should always be set to 1
+#define ADC_CONV_MODE       ADC_CONV_SINGLE_UNIT_1  //ESP32 only supports ADC1 DMA mode
+#define ADC_OUTPUT_TYPE     ADC_DIGI_OUTPUT_FORMAT_TYPE1
+#elif CONFIG_IDF_TARGET_ESP32S2
+#define ADC_RESULT_BYTE     2
+#define ADC_CONV_LIMIT_EN   0
+#define ADC_CONV_MODE       ADC_CONV_BOTH_UNIT
+#define ADC_OUTPUT_TYPE     ADC_DIGI_OUTPUT_FORMAT_TYPE2
+#elif CONFIG_IDF_TARGET_ESP32C3 || CONFIG_IDF_TARGET_ESP32H2
+#define ADC_RESULT_BYTE     4
+#define ADC_CONV_LIMIT_EN   0
+#define ADC_CONV_MODE       ADC_CONV_ALTER_UNIT     //ESP32C3 only supports alter mode
+#define ADC_OUTPUT_TYPE     ADC_DIGI_OUTPUT_FORMAT_TYPE2
+#elif CONFIG_IDF_TARGET_ESP32S3
+#define ADC_RESULT_BYTE     4
+#define ADC_CONV_LIMIT_EN   0
+#define ADC_CONV_MODE       ADC_CONV_BOTH_UNIT
+#define ADC_OUTPUT_TYPE     ADC_DIGI_OUTPUT_FORMAT_TYPE2
+#endif
+
+#if CONFIG_IDF_TARGET_ESP32C3 || CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32H2
+static uint16_t adc1_chan_mask = BIT(3);
+static adc_channel_t channel[1] = {ADC1_CHANNEL_3};
+#endif
+#if CONFIG_IDF_TARGET_ESP32S2
+static uint16_t adc1_chan_mask = BIT(2) | BIT(3);
+static uint16_t adc2_chan_mask = BIT(0);
+static adc_channel_t channel[3] = {ADC1_CHANNEL_2, ADC1_CHANNEL_3, (ADC2_CHANNEL_0 | 1 << 3)};
+#endif
+#if CONFIG_IDF_TARGET_ESP32
+static uint16_t adc1_chan_mask = BIT(7);
+static uint16_t adc2_chan_mask = 0;
+static adc_channel_t channel[1] = {ADC1_CHANNEL_7};
+#endif
+
+//static const char *TAG = "ADC DMA";
+
+/*
+ *  i2c
+*/
+static const char *TAG = "i2c-simple-example";
+
+#define I2C_MASTER_SCL_IO           18
+#define I2C_MASTER_SDA_IO           19
+//#define I2C_MASTER_SCL_IO           CONFIG_I2C_MASTER_SCL      /*!< GPIO number used for I2C master clock */
+//#define I2C_MASTER_SDA_IO           CONFIG_I2C_MASTER_SDA      /*!< GPIO number used for I2C master data  */
+#define I2C_MASTER_NUM              0                          /*!< I2C master i2c port number, the number of i2c peripheral interfaces available will depend on the chip */
+#define I2C_MASTER_FREQ_HZ          400000                     /*!< I2C master clock frequency */
+#define I2C_MASTER_TX_BUF_DISABLE   0                          /*!< I2C master doesn't need buffer */
+#define I2C_MASTER_RX_BUF_DISABLE   0                          /*!< I2C master doesn't need buffer */
+#define I2C_MASTER_TIMEOUT_MS       1000
+
+#define MPU9250_SENSOR_ADDR                 0x68        /*!< Slave address of the MPU9250 sensor */
+#define MPU9250_WHO_AM_I_REG_ADDR           0x75        /*!< Register addresses of the "who am I" register */
+
+#define MPU9250_PWR_MGMT_1_REG_ADDR         0x6B        /*!< Register addresses of the power managment register */
+#define MPU9250_RESET_BIT                   7
+
 /*
  *
  *
  *
 output:
-CAT1Ä£ï¿½ï¿½Ä¹ï¿½ï¿½ï¿½Ê¹ï¿½Ü½ï¿½	GPIO7	ï¿½ï¿½ï¿½ß¹ï¿½ï¿½ç£¬ï¿½ï¿½ï¿½Í¶Ïµï¿½
-CAT1Ä£ï¿½ï¿½Ä¿ï¿½ï¿½ï¿½ï¿½ï¿½		GPIO10	ï¿½ï¿½ï¿½ï¿½CAT1Ä£ï¿½ï¿½ï¿½SPCï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½
+CAT1Ä£¿éµÄ¹©µçÊ¹ÄÜ½Å	GPIO7	À­¸ß¹©µç£¬À­µÍ¶Ïµç
+CAT1Ä£¿éµÄ¿ª»ú½Å		GPIO10	°´ÕÕCAT1Ä£¿éµÄSPCÀ´¶¨ÒåÀ­¸ßÊ±Ðò
 
-ï¿½ï¿½ï¿½á´«ï¿½ï¿½ï¿½ï¿½ï¿½Õ¶Ë¹Ü½ï¿½		GPIO6
-2ï¿½ï¿½Ö¸Ê¾ï¿½Æ£ï¿½			GPIO8 GPIO9	ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ã´ï¿½ï¿½ï¿½Ä´ï¿½ï¿½ï¿½
+ÈýÖá´«¸ÐÆ÷ÖÕ¶Ë¹Ü½Å		GPIO6
+2¸öÖ¸Ê¾µÆ£¬			GPIO8 GPIO9	¾ßÌåÔõÃ´ÁÁµÄ´ý¶¨
 
 input:
-ï¿½ï¿½ï¿½Ö¸Ê¾ï¿½ï¿½			GPIO2	Æ½Ê±ï¿½ï¿½ï¿½ß£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
-ï¿½ï¿½Øµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½		GPIO3	ï¿½ï¿½ï¿½ï¿½Øµï¿½Ñ¹
+³äµçÖ¸Ê¾½Å			GPIO2	Æ½Ê±À­¸ß£¬³äÂúÀ­µÍ
+µç³ØµçÁ¿¼ì²â½Å		GPIO3	¼ì²âµç³ØµçÑ¹
 
 mode:
-ï¿½ï¿½4GÄ£ï¿½ï¿½Í¨Ñ¶ï¿½Ã´ï¿½ï¿½ï¿½TX	GPIO4
-ï¿½ï¿½4GÄ£ï¿½ï¿½Í¨Ñ¶ï¿½Ã´ï¿½ï¿½ï¿½RX	GPIO5
+ºÍ4GÄ£¿éÍ¨Ñ¶ÓÃ´®¿ÚTX	GPIO4
+ºÍ4GÄ£¿éÍ¨Ñ¶ÓÃ´®¿ÚRX	GPIO5
 
-I2Cï¿½ï¿½SCLï¿½ï¿½		GPIO18
-I2Cï¿½ï¿½SDAï¿½ï¿½		GPIO19
+I2CµÄSCL½Å		GPIO18
+I2CµÄSDA½Å		GPIO19
  *
  */
+
 //output
 #define GPIO_OUTPUT_UART_CAT1_EN    7
 #define GPIO_OUTPUT_UART_CAT1_POWER    10
 #define GPIO_OUTPUT_LED_0    8
 #define GPIO_OUTPUT_LED_1    9
-#define GPIO_OUTPUT_PIN_SEL  ((1ULL<<GPIO_OUTPUT_UART_CAT1_EN) | (1ULL<<GPIO_OUTPUT_UART_CAT1_POWER) \
+#define GPIO_OUTPUT_PIN_SEL1  ((1ULL<<GPIO_OUTPUT_UART_CAT1_EN) | (1ULL<<GPIO_OUTPUT_UART_CAT1_POWER) \
 			|(1ULL<<GPIO_OUTPUT_LED_0) |(1ULL<<GPIO_OUTPUT_LED_1))
-
-#define GPIO_OUTPUT_PIN_SEL1  ((1ULL<<GPIO_OUTPUT_LED_0) |(1ULL<<GPIO_OUTPUT_LED_1) | (1ULL<<GPIO_OUTPUT_UART_CAT1_POWER))
-#define GPIO_OUTPUT_PIN_SEL2  ((1ULL<<GPIO_OUTPUT_UART_CAT1_EN))
+#define GPIO_OUTPUT_PIN_SEL  ((1ULL<<GPIO_OUTPUT_UART_CAT1_EN) | (1ULL<<GPIO_OUTPUT_UART_CAT1_POWER) \
+			|(1ULL<<GPIO_OUTPUT_LED_0))
 
 //input
 #define GPIO_INPUT_CHARGET_DETECT    2
 #define GPIO_INPUT_BATTERY_DETECT    3
-
 #define GPIO_INPUT_PIN_SEL  ((1ULL<<GPIO_INPUT_CHARGET_DETECT) | (1ULL<<GPIO_INPUT_BATTERY_DETECT))
 
 #define ESP_INTR_FLAG_DEFAULT 0
 
-#define RX_TASK_TAG "rx_task"
-
-static void uart_set_buff_clean(void);
-static unsigned int uart_get_recv_cnt(void);
-
-#if 1
 static xQueueHandle gpio_evt_queue = NULL;
-static unsigned char s_locater_uart_recv_buff[1024] = {0};
-static unsigned int s_locater_uart_recv_count = 0;
-
 
 static void IRAM_ATTR gpio_isr_handler(void* arg)
 {
     uint32_t gpio_num = (uint32_t) arg;
     xQueueSendFromISR(gpio_evt_queue, &gpio_num, NULL);
-    printf("send the isr from gpio %d\r\n", gpio_num);
 }
 
 static void gpio_task(void* arg)
 {
-    uint32_t io_num = 0;
+    uint32_t io_num;
     for(;;) {
         if(xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
             printf("GPIO[%d] intr, val: %d\n", io_num, gpio_get_level(io_num));
         }
     }
 }
-#endif
-
+uint32_t get_channel(int channel_num);
 void gpio_set_output()
 {
     //zero-initialize the config structure.
@@ -114,13 +187,14 @@ void gpio_set_input()
 
 void gpio_set_intr()
 {
+
     //change gpio intrrupt type for one pin
     gpio_set_intr_type(GPIO_INPUT_CHARGET_DETECT, GPIO_INTR_ANYEDGE);
 
     //create a queue to handle gpio event from isr
     gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
     //start gpio task
-    xTaskCreate(gpio_task, "charger_task", 2048, NULL, 10, NULL);
+    xTaskCreate(gpio_task, "gpio_task", 2048, NULL, 10, NULL);
 
     //install gpio isr service
     gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
@@ -130,10 +204,18 @@ void gpio_set_intr()
     //remove isr handler for gpio number.
     gpio_isr_handler_remove(GPIO_INPUT_CHARGET_DETECT);
     //hook isr handler for specific gpio pin again
-    gpio_isr_handler_add(GPIO_INPUT_CHARGET_DETECT, gpio_isr_handler, (void*) GPIO_INPUT_IO_0);
+    gpio_isr_handler_add(GPIO_INPUT_CHARGET_DETECT, gpio_isr_handler, (void*) GPIO_INPUT_CHARGET_DETECT);
 
     printf("Minimum free heap size: %d bytes\n", esp_get_minimum_free_heap_size());
 #endif
+}
+
+void gpio_init(void)
+{
+	gpio_set_output();
+	gpio_set_input();
+
+	gpio_set_intr();
 }
 
 void uart_4g_gpio_init()
@@ -146,22 +228,11 @@ void uart_4g_gpio_init()
 	gpio_set_level(GPIO_OUTPUT_UART_CAT1_POWER, 0);
 }
 
-void gpio_init(void)
-{
-	gpio_set_output();
-    gpio_set_input();
-
-    gpio_set_intr();
-    printf("gpio init finish\r\n");
-}
-
 #if 1
 static const int RX_BUF_SIZE = 1024;
 
 #define TXD_PIN (GPIO_NUM_4)
 #define RXD_PIN (GPIO_NUM_5)
-
-
 
 int sendData(const char* logName, const char* data)
 {
@@ -173,183 +244,28 @@ int sendData(const char* logName, const char* data)
 
 static void tx_task(void *arg)
 {
-    int ret = 0;
-    char *p_atcmd = NULL;
     static const char *TX_TASK_TAG = "TX_TASK";
-
     esp_log_level_set(TX_TASK_TAG, ESP_LOG_INFO);
-
-#if 0
-    vTaskDelay(15000 / portTICK_PERIOD_MS);
-#else
-    vTaskDelay(55000 / portTICK_PERIOD_MS);
-
     while (1) {
-        printf("// check SIMCOMATI\n");
-        uart_set_buff_clean();
-        p_atcmd = "AT+SIMCOMATI\r\n";
-        uart_write_bytes(UART_NUM_1, p_atcmd, strlen(p_atcmd));
-        while (1) {
-            ret = uart_get_recv_cnt();
-            if (ret) {
-                printf("wait atcmd done: %s\n", p_atcmd);
-                break;
-            }
-            vTaskDelay(15000 / portTICK_PERIOD_MS);
-        }
-        printf("rx:\n");
-        printf("%s\n", s_locater_uart_recv_buff);
-        printf("\n\n");
-
-        // Access to MQTT server not SSL/TLS
-        uart_set_buff_clean();
-        p_atcmd = "ATE0\r\n";
-        uart_write_bytes(UART_NUM_1, p_atcmd, strlen(p_atcmd));
-        while (1) {
-            ret = uart_get_recv_cnt();
-            if (ret) {
-                printf("wait atcmd done: %s\n", p_atcmd);
-                break;
-            }
-            vTaskDelay(15000 / portTICK_PERIOD_MS);
-        }
-        printf("rx:\n");
-        printf("%s\n", s_locater_uart_recv_buff);
-        printf("\n\n");
-
-        printf("// check CPIN\n");
-        uart_set_buff_clean();
-        p_atcmd = "AT+CPIN?\r\n";
-        uart_write_bytes(UART_NUM_1, p_atcmd, strlen(p_atcmd));
-        while (1) {
-            ret = uart_get_recv_cnt();
-            if (ret) {
-                printf("wait atcmd done: %s\n", p_atcmd);
-                break;
-            }
-            vTaskDelay(15000 / portTICK_PERIOD_MS);
-        }
-        printf("rx:\n");
-        printf("%s\n", s_locater_uart_recv_buff);
-        printf("\n\n");
-
-        printf("// start MQTT service, activate PDP context\n");
-        uart_set_buff_clean();
-        p_atcmd = "AT+CMQTTSTART\r\n";
-        uart_write_bytes(UART_NUM_1, p_atcmd, strlen(p_atcmd));
-        while (1) {
-            ret = uart_get_recv_cnt();
-            if (ret) {
-                printf("wait atcmd done: %s\n", p_atcmd);
-                break;
-            }
-            vTaskDelay(15000 / portTICK_PERIOD_MS);
-        }
-        printf("rx:\n");
-        printf("%s\n", s_locater_uart_recv_buff);
-        printf("\n\n");
-
-        printf("// Acquire one client which will connect to a MQTT server not SSL/TLS\n");
-        uart_set_buff_clean();
-        p_atcmd = "AT+CMQTTACCQ=0,\"client test0\"";
-        uart_write_bytes(UART_NUM_1, p_atcmd, strlen(p_atcmd));
-        while (1) {
-            ret = uart_get_recv_cnt();
-            if (ret) {
-                printf("wait atcmd done: %s\n", p_atcmd);
-                break;
-            }
-            vTaskDelay(15000 / portTICK_PERIOD_MS);
-        }
-        printf("rx:\n");
-        printf("%s\n", s_locater_uart_recv_buff);
-        printf("\n\n");
-
-        printf("// Set the will topic for the CONNECT message\n");
-        uart_set_buff_clean();
-        p_atcmd = "AT+CMQTTWILLTOPIC=0,10";
-        uart_write_bytes(UART_NUM_1, p_atcmd, strlen(p_atcmd));
-        while (1) {
-            ret = uart_get_recv_cnt();
-            if (ret) {
-                printf("wait atcmd done: %s\n", p_atcmd);
-                break;
-            }
-            vTaskDelay(15000 / portTICK_PERIOD_MS);
-        }
-        printf("rx:\n");
-        printf("%s\n", s_locater_uart_recv_buff);
-        printf("\n\n");
-
-        printf("// Set the will message for the CONNECT message\n");
-        uart_set_buff_clean();
-        p_atcmd = "AT+CMQTTWILLMSG=0,6,1";
-        uart_write_bytes(UART_NUM_1, p_atcmd, strlen(p_atcmd));
-        while (1) {
-            ret = uart_get_recv_cnt();
-            if (ret) {
-                printf("wait atcmd done: %s\n", p_atcmd);
-                break;
-            }
-            vTaskDelay(15000 / portTICK_PERIOD_MS);
-        }
-        printf("rx:\n");
-        printf("%s\n", s_locater_uart_recv_buff);
-        printf("\n\n");
-
-        printf("// Connect to a MQTT server\n");
-        uart_set_buff_clean();
-        p_atcmd = "AT+CMQTTCONNECT=0,\"tcp://1.117.221.12:1883\",60,1,\"ABCABCABC\",\"ABCABCABC\"\r";
-        uart_write_bytes(UART_NUM_1, p_atcmd, strlen(p_atcmd));
-        while (1) {
-            ret = uart_get_recv_cnt();
-            if (ret) {
-                printf("wait atcmd done: %s\n", p_atcmd);
-                break;
-            }
-            vTaskDelay(15000 / portTICK_PERIOD_MS);
-        }
-        printf("rx:\n");
-        printf("%s\n", s_locater_uart_recv_buff);
-        printf("\n\n");
-    }
-
-#endif
-
-    while (1) {
+        sendData(TX_TASK_TAG, "AT+CPIN?");
         vTaskDelay(2000 / portTICK_PERIOD_MS);
     }
 }
 
-static void uart_set_buff_clean(void)
-{
-    s_locater_uart_recv_count = 0;
-}
-
-static unsigned int uart_get_recv_cnt(void)
-{
-    return s_locater_uart_recv_count;
-}
-
 static void rx_task(void *arg)
 {
-    int rx_bytes = 0, rx_final = 0;
-    unsigned int remain = 0;
-
+    static const char *RX_TASK_TAG = "RX_TASK";
     esp_log_level_set(RX_TASK_TAG, ESP_LOG_INFO);
+    uint8_t* data = (uint8_t*) malloc(RX_BUF_SIZE+1);
     while (1) {
-        rx_bytes = uart_read_bytes(UART_NUM_1, \
-                s_locater_uart_recv_buff + s_locater_uart_recv_count, \
-                sizeof(s_locater_uart_recv_buff) - s_locater_uart_recv_count, 1000 / portTICK_RATE_MS);
-        if (rx_bytes > 0 && \
-                s_locater_uart_recv_count < (sizeof(s_locater_uart_recv_buff) - 1))
-        {
-            remain = sizeof(s_locater_uart_recv_buff) - s_locater_uart_recv_count;
-            rx_final = rx_bytes > remain ? remain : rx_bytes;
-            s_locater_uart_recv_count += rx_final;
-            s_locater_uart_recv_buff[s_locater_uart_recv_count] = 0;
+        const int rxBytes = uart_read_bytes(UART_NUM_1, data, RX_BUF_SIZE, 1000 / portTICK_RATE_MS);
+        if (rxBytes > 0) {
+            data[rxBytes] = 0;
+            ESP_LOGI(RX_TASK_TAG, "Read %d bytes: '%s'", rxBytes, data);
+            ESP_LOG_BUFFER_HEXDUMP(RX_TASK_TAG, data, rxBytes, ESP_LOG_INFO);
         }
     }
+    free(data);
 }
 
 void uart_4g_init(void)
@@ -389,45 +305,233 @@ void led_work()
 
 void gpio_test()
 {
-#if 0
+#if 1
     int cnt = 0;
 
     while(1) {
         printf("cnt: %d\n", cnt++);
         vTaskDelay(1000 / portTICK_RATE_MS);
-        gpio_set_level(GPIO_OUTPUT_LED_0, cnt % 2);
-        gpio_set_level(GPIO_OUTPUT_LED_1, cnt % 2);
         //gpio_set_level(GPIO_OUTPUT_UART_CAT1_EN, cnt % 2);
-        //printf("GPIO[%d] intr, val: %d\n", GPIO_OUTPUT_UART_CAT1_EN, gpio_get_level(GPIO_OUTPUT_UART_CAT1_EN));
+        printf("GPIO[%d] time out, val: %d\n", GPIO_INPUT_CHARGET_DETECT, gpio_get_level(GPIO_INPUT_CHARGET_DETECT));
+
+        printf("channel data is %x\r\n", get_channel(0));
     }
 #endif
 }
 
+void temp_init()
+{
+	// Initialize touch pad peripheral, it will start a timer to run a filter
+	//ESP_LOGI(TAG, "Initializing Temperature sensor");
+	printf("Initializing Temperature sensor\r\n");
+	temp_sensor_config_t temp_sensor = TSENS_CONFIG_DEFAULT();
+	temp_sensor_get_config(&temp_sensor);
+	//ESP_LOGI(TAG, "default dac %d, clk_div %d", temp_sensor.dac_offset, temp_sensor.clk_div);
+	printf("default dac %d, clk_div %d\r\n", temp_sensor.dac_offset, temp_sensor.clk_div);
+	temp_sensor.dac_offset = TSENS_DAC_DEFAULT;
+	temp_sensor_set_config(temp_sensor);
+	temp_sensor_start();
+	//ESP_LOGI(TAG, "Temperature sensor started");
+	printf("Temperature sensor started\r\n");
+}
+
+float hardware_temp_get()
+{
+	float tsens_out;
+	//while (1) {
+		//vTaskDelay(1000 / portTICK_RATE_MS);
+		temp_sensor_read_celsius(&tsens_out);
+		//ESP_LOGI(TAG, "Temperature out celsius %f", tsens_out);
+		printf("Temperature out celsius %f\r\n", tsens_out);
+	//}
+	return tsens_out;
+}
+
+
+static void continuous_adc_init(uint16_t adc1_chan_mask, uint16_t adc2_chan_mask, adc_channel_t *channel, uint8_t channel_num)
+{
+    adc_digi_init_config_t adc_dma_config = {
+        .max_store_buf_size = 1024,
+        .conv_num_each_intr = TIMES,
+        .adc1_chan_mask = adc1_chan_mask,
+        .adc2_chan_mask = adc2_chan_mask,
+    };
+    ESP_ERROR_CHECK(adc_digi_initialize(&adc_dma_config));
+
+    adc_digi_configuration_t dig_cfg = {
+        .conv_limit_en = ADC_CONV_LIMIT_EN,
+        .conv_limit_num = 250,
+        .sample_freq_hz = 10 * 1000,
+        .conv_mode = ADC_CONV_MODE,
+        .format = ADC_OUTPUT_TYPE,
+    };
+
+    adc_digi_pattern_config_t adc_pattern[SOC_ADC_PATT_LEN_MAX] = {0};
+    dig_cfg.pattern_num = channel_num;
+    for (int i = 0; i < channel_num; i++) {
+        uint8_t unit = GET_UNIT(channel[i]);
+        uint8_t ch = channel[i] & 0x7;
+        adc_pattern[i].atten = ADC_ATTEN_DB_11;//ADC_ATTEN_DB_0;
+        adc_pattern[i].channel = ch;
+        adc_pattern[i].unit = unit;
+        adc_pattern[i].bit_width = SOC_ADC_DIGI_MAX_BITWIDTH;
+
+        ESP_LOGI(TAG, "adc_pattern[%d].atten is :%x", i, adc_pattern[i].atten);
+        ESP_LOGI(TAG, "adc_pattern[%d].channel is :%x", i, adc_pattern[i].channel);
+        ESP_LOGI(TAG, "adc_pattern[%d].unit is :%x", i, adc_pattern[i].unit);
+    }
+    dig_cfg.adc_pattern = adc_pattern;
+    ESP_ERROR_CHECK(adc_digi_controller_configure(&dig_cfg));
+}
+
+#if !CONFIG_IDF_TARGET_ESP32
+static bool check_valid_data(const adc_digi_output_data_t *data)
+{
+    const unsigned int unit = data->type2.unit;
+    if (unit > 2) return false;
+    if (data->type2.channel >= SOC_ADC_CHANNEL_NUM(unit)) return false;
+
+    return true;
+}
+#endif
+
+uint32_t get_channel(int channel_num)
+{
+    esp_err_t ret;
+    uint32_t ret_num = 0;
+    uint8_t result[TIMES] = {0};
+    memset(result, 0xcc, TIMES);
+
+    //continuous_adc_init(adc1_chan_mask, adc2_chan_mask, channel, sizeof(channel) / sizeof(adc_channel_t));
+    continuous_adc_init(adc1_chan_mask, 0, channel, sizeof(channel) / sizeof(adc_channel_t));
+    adc_digi_start();
+
+    ret = adc_digi_read_bytes(result, TIMES, &ret_num, ADC_MAX_DELAY);
+    adc_digi_output_data_t *p = (void*)&result[channel_num];
+
+    adc_digi_stop();
+    ret = adc_digi_deinitialize();
+    assert(ret == ESP_OK);
+
+    ESP_LOGI(TAG, "Unit: %d,_Channel: %d, Value: %x", p->type2.unit+1, p->type2.channel, p->type2.data);
+    return p->type2.data;
+}
+
+
+/**
+ * @brief Read a sequence of bytes from a MPU9250 sensor registers
+ */
+static esp_err_t mpu9250_register_read(uint8_t reg_addr, uint8_t *data, size_t len)
+{
+    return i2c_master_write_read_device(I2C_MASTER_NUM, MPU9250_SENSOR_ADDR, &reg_addr, 1, data, len, I2C_MASTER_TIMEOUT_MS / portTICK_RATE_MS);
+}
+
+/**
+ * @brief Write a byte to a MPU9250 sensor register
+ */
+static esp_err_t mpu9250_register_write_byte(uint8_t reg_addr, uint8_t data)
+{
+    int ret;
+    uint8_t write_buf[2] = {reg_addr, data};
+
+    ret = i2c_master_write_to_device(I2C_MASTER_NUM, MPU9250_SENSOR_ADDR, write_buf, sizeof(write_buf), I2C_MASTER_TIMEOUT_MS / portTICK_RATE_MS);
+
+    return ret;
+}
+
+/**
+ * @brief i2c master initialization
+ */
+static esp_err_t i2c_master_init(void)
+{
+    int i2c_master_port = I2C_MASTER_NUM;
+
+    i2c_config_t conf = {
+        .mode = I2C_MODE_MASTER,
+        .sda_io_num = I2C_MASTER_SDA_IO,
+        .scl_io_num = I2C_MASTER_SCL_IO,
+        .sda_pullup_en = GPIO_PULLUP_ENABLE,
+        .scl_pullup_en = GPIO_PULLUP_ENABLE,
+        .master.clk_speed = I2C_MASTER_FREQ_HZ,
+    };
+
+    i2c_param_config(i2c_master_port, &conf);
+
+    return i2c_driver_install(i2c_master_port, conf.mode, I2C_MASTER_RX_BUF_DISABLE, I2C_MASTER_TX_BUF_DISABLE, 0);
+}
+
+
 void hareware_main()
 {
-	gpio_init();//gpio2 3 13 8 9
-	uart_4g_init();//gpio15 10,uart 14 12
-	uart_4g_main();
+	temp_init();
+	//gpio_init();
+#if 1
+	uint8_t data[2];
+	ESP_ERROR_CHECK(i2c_master_init());
+	ESP_LOGI(TAG, "I2C initialized successfully");
+	/* Read the MPU9250 WHO_AM_I register, on power up the register should have the value 0x71 */
+	ESP_ERROR_CHECK(mpu9250_register_read(MPU9250_WHO_AM_I_REG_ADDR, data, 1));
+
+	int cnt = 0;
+	while(1)
+	{
+		printf("cnt: %d\n", cnt++);
+		//printf("temp is %f\r\n", hardware_temp_get());
+		//printf("channel data is %x\r\n", get_channel(0));
+
+
+	    ESP_LOGI(TAG, "WHO_AM_I = %X", data[0]);
+
+	    /* Demonstrate writing by reseting the MPU9250 */
+	    //ESP_ERROR_CHECK(mpu9250_register_write_byte(MPU9250_PWR_MGMT_1_REG_ADDR, 1 << MPU9250_RESET_BIT));
+
+		vTaskDelay(2000 / portTICK_PERIOD_MS);
+	}
+	ESP_ERROR_CHECK(i2c_driver_delete(I2C_MASTER_NUM));
+	ESP_LOGI(TAG, "I2C unitialized successfully");
+#endif
+	//gpio_init();//gpio2 3 13 8 9
+	//uart_4g_init();//gpio15 10,uart 14 12
+	//uart_4g_main();
 	//i2c_init();//gpio 18,19
 
-    pthread_attr_t attr;
-    pthread_t thread1, thread2;
-    esp_pthread_cfg_t esp_pthread_cfg;
-    int res;
-
-    // Create a pthread with the default parameters
-    res = pthread_create(&thread1, NULL, gpio_test, NULL);
-    if(!res)
-    {
-        printf("Created thread 0x%x\n", thread1);
-    	printf("message init success\r\n");
-    }
-    else
-    {
-    	//assert(res == 0);
-    	printf("message init fail\r\n");
-    }
+//    //pthread_attr_t attr;
+//    pthread_t thread1;// thread2;
+//    //esp_pthread_cfg_t esp_pthread_cfg;
+//    int res;
+//
+//    // Create a pthread with the default parameters
+//    res = pthread_create(&thread1, NULL, gpio_test, NULL);
+//    if(!res)
+//    {
+//        printf("Created thread 0x%x\n", thread1);
+//    	printf("message init success\r\n");
+//    }
+//    else
+//    {
+//    	//assert(res == 0);
+//    	printf("message init fail\r\n");
+//    }
 
 	//todo u
 	printf("hardware init finish\r\n");
+}
+
+int hardware_leds_ctl(int ledidx, int onoff)
+{
+	int gpio = ledidx;
+    gpio_set_level(gpio, onoff);
+    return 0;
+}
+
+int hardware_battery_get_cap()
+{
+	return 0;
+}
+
+
+//²Î¿¼peripherals/wave_gen
+int hardware_voice_record()
+{
+	return 0;
 }
