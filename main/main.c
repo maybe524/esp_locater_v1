@@ -14,6 +14,8 @@
 #include "esp_spi_flash.h"
 #include "common.h"
 
+#include "locater_v1.h"
+
 
 
 static int app_locator_init(void)
@@ -37,6 +39,7 @@ void app_main(void)
     //net_init();
 
     message_init();
+    locater_uart_init();
 
     while(1)
     {
