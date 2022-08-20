@@ -1,5 +1,5 @@
 #define LOCATER_MAX_AT_RESP_LEN (215)
-#define LOCATOR_UART_STEP_ENTRY(s)   if (step == (s))
+#define LOCATOR_UART_FSM_COM_STEP_ENTRY(s)   if (step == (s))
 // #define LOCATOR_DEBUG_MODE
 #define ARRAY_LEN(a)    (sizeof(a) / sizeof(a[0]))
 #define LOCATER_IMEI_SIZE   (15)

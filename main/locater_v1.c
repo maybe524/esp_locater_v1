@@ -27,6 +27,11 @@ static char s_locater_device_serial_buff[LOCATER_DEVICE_SERIAL_SIZE + 1] = {0};
 static bool s_is_locater_online = false;
 static unsigned int s_locater_temperature_threshold_high = 0, s_locater_temperature_threshold_low = 0;
 
+static unsigned int locater_uart_get_temperature(void);
+static unsigned int locater_uart_get_collision(void);
+static unsigned int locater_uart_get_battery_level(void);
+
+
 static unsigned int locater_check_flags_32(unsigned int *p_flags, unsigned int mask)
 {
     return (*p_flags) & mask;
@@ -1919,7 +1924,22 @@ static int locater_uart_set_mqtt_willmsg(void)
     return ret;
 }
 
-static void locater_uart_device_online_conf_task(void *arg)
+static unsigned int locater_uart_get_temperature(void)
+{
+    return 0;
+}
+
+static unsigned int locater_uart_get_collision(void)
+{
+    return 0;
+}
+
+static unsigned int locater_uart_get_battery_level(void)
+{
+    return 0;
+}
+
+static void locater_uart_app_task(void *arg)
 {
     int ret = 0, idx = 0, i = 0;
     char *p_atcmd = NULL;
@@ -1930,20 +1950,23 @@ static void locater_uart_device_online_conf_task(void *arg)
     unsigned int retry_cnt = 0;
     unsigned int at_res_line = 0;
     int client_handle = 0;
+    unsigned int collision_alarm = 0;
+    unsigned int battery_level = 0;
+    unsigned int temperature = 0;
+    bool is_need_upload_service = false;
+    char mqtt_topic_str_buf[32] = {0};
+    char mqtt_payload_str_buf[32] = {0};
 
     esp_log_level_set(TX_TASK_TAG, ESP_LOG_INFO);
 
 start_que:
     vTaskDelay(5000 / portTICK_PERIOD_MS);
-LOCATOR_UART_STEP_ENTRY(0) {
+LOCATOR_UART_FSM_COM_STEP_ENTRY(0) {
         printf("\n\n");
         printf("//////////////////%04d//////////////////\n", idx++);
-
         s_is_locater_online = false;
         
-        /*
-        *  习惯性的输入回车换行
-        */
+        ///< 习惯性的输入回车换行
         p_at_cmd_str = "\r\n\r\n";
         uart_write_bytes(UART_NUM_1, p_at_cmd_str, strlen(p_at_cmd_str));
 
@@ -1957,10 +1980,8 @@ LOCATOR_UART_STEP_ENTRY(0) {
         step++;
     }
 
-LOCATOR_UART_STEP_ENTRY(1) {
-        /*
-        *  检查SIM在位情况
-        */
+LOCATOR_UART_FSM_COM_STEP_ENTRY(1) {
+        ///< 检查SIM在位情况
         printf("\r\n\r\n");
         ret = locater_uart_get_cpin(&s_locater_atres_cpin);
         printf("cpin, detect sim ready: %d (%d)\n", s_locater_atres_cpin.is_ready, ret);
@@ -1969,9 +1990,7 @@ LOCATOR_UART_STEP_ENTRY(1) {
             goto start_que;
         }
 
-        /*
-        *  检查信号质量
-        */
+        ///< 检查信号质量
         printf("\r\n\r\n");
         retry_cnt = 500;
         ret = locater_uart_get_csq(&s_locater_csq);
@@ -1985,9 +2004,7 @@ LOCATOR_UART_STEP_ENTRY(1) {
         ret = locater_uart_get_cpsi(&s_locater_atres_cpsi);
         printf("get_cpsi, detect cpsi, (ret: %d)\n", ret);
 
-        /*
-        *  检查网络注册情况
-        */
+        ///< 检查网络注册情况
         printf("\r\n\r\n");
         ret = locater_uart_get_cereg(&s_locater_atres_cereg);
         printf("get_cereg, detect n: %d, status: %d\n", s_locater_atres_cereg.result_code, s_locater_atres_cereg.status);
@@ -2004,9 +2021,7 @@ LOCATOR_UART_STEP_ENTRY(1) {
             goto start_que;
         }
 
-        /*
-        *  设置移动卡接入网络
-        */
+        ///< 设置移动卡接入网络
         printf("\r\n\r\n");
         ret = locater_uart_set_cgdcont_cmnet();
         printf("cgdcont_cmnet, detect cgdcont cmnet ret: %d\n", ret);
@@ -2030,9 +2045,7 @@ LOCATOR_UART_STEP_ENTRY(1) {
             goto start_que;
         }
 
-        /*
-        *  CGACT激活网络。AT+CGACT之前先查询一下，返回为1才执行CGACT
-        */
+        ///< CGACT激活网络。AT+CGACT之前先查询一下，返回为1才执行CGACT
         printf("\r\n\r\n");
         ret = locater_uart_set_cgact();
         printf("cgact, detect set cgact ret: %d\n", ret);
@@ -2047,13 +2060,8 @@ LOCATOR_UART_STEP_ENTRY(1) {
             step++;
     }
 
-LOCATOR_UART_STEP_ENTRY(2) {
-        char mqtt_topic_str_buf[32] = {0};
-        char mqtt_payload_str_buf[32] = {0};
-
-        /*
-        *  启动MQTT
-        */
+LOCATOR_UART_FSM_COM_STEP_ENTRY(2) {
+        ///< 启动MQTT
         printf("\r\n\r\n");
         ret = locater_uart_set_mqtt_start();
         printf("detect mqtt start result: %d\n", ret);
@@ -2063,9 +2071,7 @@ LOCATOR_UART_STEP_ENTRY(2) {
             goto start_que;
         }
 
-        /*
-        *  创建一个MQTT客户端
-        */
+        ///< 创建一个MQTT客户端
         printf("\r\n\r\n");
         ret = locater_uart_set_mqtt_accq();
         printf("mqtt_accq, detect mqtt create client result: %d\n", ret);
@@ -2082,9 +2088,7 @@ LOCATOR_UART_STEP_ENTRY(2) {
         locater_uart_get_device_serial_by_imei(s_locater_atres_cgsn.imei_64, s_locater_device_serial_buff, sizeof(s_locater_device_serial_buff));
         printf("device_serial, str result: %s\n", s_locater_device_serial_buff);
 
-        /*
-        *  MQTT连接
-        */
+        ///<  MQTT连接
         printf("\r\n\r\n");
         ret = locater_uart_set_mqtt_connect();
         printf("mqtt_connect, detect mqtt connect result: %d\n", ret);
@@ -2100,23 +2104,48 @@ LOCATOR_UART_STEP_ENTRY(2) {
         ret = locater_uart_set_mqtt_willtopic();
         ret = locater_uart_set_mqtt_willmsg();
 
-        /*
-        *  上线通知服务器
-        */
-       sprintf(mqtt_topic_str_buf, "%sD/0/0", s_locater_device_serial_buff);
-       ret = locater_uart_set_mqtt_sub(client_handle, mqtt_topic_str_buf, 0);
+        ///< 上线通知服务器
+        sprintf(mqtt_topic_str_buf, "%sD/0/0", s_locater_device_serial_buff);
+        ret = locater_uart_set_mqtt_sub(client_handle, mqtt_topic_str_buf, 0);
 
-       ret = locater_uart_set_mqtt_topic(client_handle, mqtt_topic_str_buf, 0);
+        ret = locater_uart_set_mqtt_topic(client_handle, mqtt_topic_str_buf, 0);
 
-       sprintf(mqtt_payload_str_buf, "%s", "1");
-       ret = locater_uart_set_mqtt_payload(client_handle, mqtt_payload_str_buf, 0);
+        sprintf(mqtt_payload_str_buf, "%s", "1");
+        ret = locater_uart_set_mqtt_payload(client_handle, mqtt_payload_str_buf, 0);
 
-       ret = locater_uart_set_mqtt_pub(client_handle, 0);
-       s_is_locater_online = true;
-       step++;
+        ret = locater_uart_set_mqtt_pub(client_handle, 0);
+        s_is_locater_online = true;
+        step++;
     }
 
-LOCATOR_UART_STEP_ENTRY(3) {
+LOCATOR_UART_FSM_COM_STEP_ENTRY(3) {
+        temperature = locater_uart_get_temperature();
+        if (temperature > s_locater_temperature_threshold_high) {
+            sprintf(mqtt_topic_str_buf, "%sD/%d/122", s_locater_device_serial_buff, 251);
+            is_need_upload_service = true;
+        }
+        else if (temperature < s_locater_temperature_threshold_low) {
+            sprintf(mqtt_topic_str_buf, "%sD/%d/222", s_locater_device_serial_buff, 251);
+            is_need_upload_service = true;
+        }
+        if (is_need_upload_service) {
+            ret = locater_uart_set_mqtt_sub(client_handle, mqtt_topic_str_buf, 0);
+            ret = locater_uart_set_mqtt_topic(client_handle, mqtt_topic_str_buf, 0);
+            memset(mqtt_payload_str_buf, 0, sizeof(mqtt_payload_str_buf));
+            ret = locater_uart_set_mqtt_payload(client_handle, mqtt_payload_str_buf, 0);
+            ret = locater_uart_set_mqtt_pub(client_handle, 0);
+        }
+
+        collision_alarm = locater_uart_get_collision();
+        if (collision_alarm) {
+            sprintf(mqtt_topic_str_buf, "%sD/%d/42", s_locater_device_serial_buff, 188);
+            ret = locater_uart_set_mqtt_sub(client_handle, mqtt_topic_str_buf, 0);
+            ret = locater_uart_set_mqtt_topic(client_handle, mqtt_topic_str_buf, 0);
+            memset(mqtt_payload_str_buf, 0, sizeof(mqtt_payload_str_buf));
+            ret = locater_uart_set_mqtt_payload(client_handle, mqtt_payload_str_buf, 0);
+            ret = locater_uart_set_mqtt_pub(client_handle, 0);
+        }
+
         /*
         *  间隔几分钟检查一次网络
         */
@@ -2127,104 +2156,11 @@ LOCATOR_UART_STEP_ENTRY(3) {
     }
 }
 
-static unsigned int locater_uart_get_temperature(void)
-{
-    return 0;
-}
-
-static unsigned int locater_uart_get_collision(void)
-{
-    return 0;
-}
-
-static unsigned int locater_uart_get_battery_level(void)
-{
-    return 0;
-}
-
-static void locater_uart_misc_task(void *arg)
-{
-    int ret;
-    unsigned int step = 0;
-    unsigned int temperature = 0;
-    char mqtt_topic_str_buf[32] = {0};
-    char mqtt_payload_str_buf[32] = {0};
-    int client_handle = 0;
-    unsigned int collision_alarm = 0;
-    unsigned int battery_level = 0;
-    bool is_need_upload_service = false;
-
-LOCATOR_UART_STEP_ENTRY(0) {
-        if (s_is_locater_online)
-            step++;
-        else {
-            vTaskDelay(5000 / portTICK_PERIOD_MS);
-        }
-    }
-
-    /*
-    *  此步骤仅仅处理温度
-    */
-LOCATOR_UART_STEP_ENTRY(1) {
-        is_need_upload_service = false;
-        temperature = locater_uart_get_temperature();
-
-        if (temperature > s_locater_temperature_threshold_high) {
-            sprintf(mqtt_topic_str_buf, "%sD/%d/122", s_locater_device_serial_buff, 251);
-            is_need_upload_service = true;
-        }
-        else if (temperature < s_locater_temperature_threshold_low) {
-            sprintf(mqtt_topic_str_buf, "%sD/%d/222", s_locater_device_serial_buff, 251);
-            is_need_upload_service = true;
-        }
-
-        if (is_need_upload_service) {
-            ret = locater_uart_set_mqtt_sub(client_handle, mqtt_topic_str_buf, 0);
-            ret = locater_uart_set_mqtt_topic(client_handle, mqtt_topic_str_buf, 0);
-            sprintf(mqtt_payload_str_buf, "%s", "1");
-            ret = locater_uart_set_mqtt_payload(client_handle, mqtt_payload_str_buf, 0);
-            ret = locater_uart_set_mqtt_pub(client_handle, 0);
-        }
-
-        step++;
-    }
-
-    /*
-    *  此步骤仅仅处理碰撞预警
-    */
-LOCATOR_UART_STEP_ENTRY(2) {
-        collision_alarm = locater_uart_get_collision();
-        if (collision_alarm) {
-            sprintf(mqtt_topic_str_buf, "%sD/%d/42", s_locater_device_serial_buff, 188);
-            ret = locater_uart_set_mqtt_sub(client_handle, mqtt_topic_str_buf, 0);
-            ret = locater_uart_set_mqtt_topic(client_handle, mqtt_topic_str_buf, 0);
-            sprintf(mqtt_payload_str_buf, "%s", "1");
-            ret = locater_uart_set_mqtt_payload(client_handle, mqtt_payload_str_buf, 0);
-            ret = locater_uart_set_mqtt_pub(client_handle, 0);
-        }
-        step++;
-    }
-
-    /*
-    *  此步骤仅仅处理电池电量上报服务器
-    */
-LOCATOR_UART_STEP_ENTRY(3) {
-        is_need_upload_service = false;
-        battery_level = locater_uart_get_battery_level();
-        if (battery_level < 10) {
-            sprintf(mqtt_topic_str_buf, "%sD/%d/42", s_locater_device_serial_buff, 188);
-            is_need_upload_service = true;
-        }
-    }
-}
-
-
-
 int locater_uart_init(void)
 {
-    xTaskCreate(locater_uart_device_online_conf_task, \
-        "uart_tlocater_uart_device_online_conf_taskx_task", 
+    xTaskCreate(locater_uart_app_task, \
+        "uart_locater_uart_device_online_conf_task", 
         1024*2, NULL, configMAX_PRIORITIES-1, NULL);
-    
+
     return 0;
 }
