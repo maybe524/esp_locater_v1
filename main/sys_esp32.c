@@ -12,9 +12,6 @@
 #include "esp_event.h"
 #include "esp_log.h"
 
-//connect
-#include "esp_dpp.h"
-
 //ota
 #include "esp_ota_ops.h"
 #include "esp_http_client.h"
@@ -26,48 +23,14 @@
 #include "driver/gpio.h"
 #include "lwip/err.h"
 #include "lwip/sys.h"
-
+#include "common.h"
 static const char *TAG = "system";
-
+unsigned int gulWifiConnect = 0;
+unsigned int gulRunning = 0;
 //connect
 #define CONFIG_EXAMPLE_CONNECT_WIFI   1
 #define CONFIG_EXAMPLE_WIFI_SSID	"CMCC-NtKi"
 #define CONFIG_EXAMPLE_WIFI_PASSWORD	"3d687272"
-
-//scan
-#define DEFAULT_SCAN_LIST_SIZE 10
-
-
-//wifi connect
-#ifdef CONFIG_ESP_DPP_LISTEN_CHANNEL
-#define EXAMPLE_DPP_LISTEN_CHANNEL_LIST     CONFIG_ESP_DPP_LISTEN_CHANNEL_LIST
-#else
-#define EXAMPLE_DPP_LISTEN_CHANNEL_LIST     "6"
-#endif
-
-#ifdef CONFIG_ESP_DPP_BOOTSTRAPPING_KEY
-#define EXAMPLE_DPP_BOOTSTRAPPING_KEY   CONFIG_ESP_DPP_BOOTSTRAPPING_KEY
-#else
-#define EXAMPLE_DPP_BOOTSTRAPPING_KEY   0
-#endif
-
-#ifdef CONFIG_ESP_DPP_DEVICE_INFO
-#define EXAMPLE_DPP_DEVICE_INFO      CONFIG_ESP_DPP_DEVICE_INFO
-#else
-#define EXAMPLE_DPP_DEVICE_INFO      0
-#endif
-
-wifi_config_t s_dpp_wifi_config;
-
-static int s_retry_num = 0;
-
-/* FreeRTOS event group to signal when we are connected*/
-static EventGroupHandle_t s_dpp_event_group;
-
-#define DPP_CONNECTED_BIT  BIT0
-#define DPP_CONNECT_FAIL_BIT     BIT1
-#define DPP_AUTH_FAIL_BIT           BIT2
-
 
 //ota
 uint8_t server_cert_pem_start[] asm("_binary_ca_cert_pem_start");
@@ -77,123 +40,9 @@ uint8_t server_cert_pem_end[] asm("_binary_ca_cert_pem_end");
 
 #define OTA_URL_SIZE 256
 
-
-static void event_handler(void *arg, esp_event_base_t event_base,
-                          int32_t event_id, void *event_data)
-{
-    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        ESP_ERROR_CHECK(esp_supp_dpp_start_listen());
-        ESP_LOGI(TAG, "Started listening for DPP Authentication");
-    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        if (s_retry_num < 5) {
-            esp_wifi_connect();
-            s_retry_num++;
-            ESP_LOGI(TAG, "retry to connect to the AP");
-        } else {
-            xEventGroupSetBits(s_dpp_event_group, DPP_CONNECT_FAIL_BIT);
-        }
-        ESP_LOGI(TAG, "connect to the AP fail");
-    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-        ip_event_got_ip_t *event = (ip_event_got_ip_t *) event_data;
-        ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
-        s_retry_num = 0;
-        xEventGroupSetBits(s_dpp_event_group, DPP_CONNECTED_BIT);
-    }
-}
-
-void dpp_enrollee_event_cb(esp_supp_dpp_event_t event, void *data)
-{
-    switch (event) {
-    case ESP_SUPP_DPP_URI_READY:
-        if (data != NULL) {
-            //esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
-
-            ESP_LOGI(TAG, "Scan below QR Code to configure the enrollee:\n");
-            //esp_qrcode_generate(&cfg, (const char *)data);
-        }
-        printf("dpp_enrollee_event_cb111111\r\n");
-        break;
-    case ESP_SUPP_DPP_CFG_RECVD:
-        memcpy(&s_dpp_wifi_config, data, sizeof(s_dpp_wifi_config));
-        esp_wifi_set_config(ESP_IF_WIFI_STA, &s_dpp_wifi_config);
-        ESP_LOGI(TAG, "DPP Authentication successful, connecting to AP : %s",
-                 s_dpp_wifi_config.sta.ssid);
-        s_retry_num = 0;
-        esp_wifi_connect();
-        printf("dpp_enrollee_event_cb222222\r\n");
-        break;
-    case ESP_SUPP_DPP_FAIL:
-        if (s_retry_num < 5) {
-            ESP_LOGI(TAG, "DPP Auth failed (Reason: %s), retry...", esp_err_to_name((int)data));
-            ESP_ERROR_CHECK(esp_supp_dpp_start_listen());
-            s_retry_num++;
-        } else {
-            xEventGroupSetBits(s_dpp_event_group, DPP_AUTH_FAIL_BIT);
-        }
-        printf("dpp_enrollee_event_cb333333\r\n");
-        break;
-    default:
-    	printf("dpp_enrollee_event_cb44444\r\n");
-        break;
-    }
-}
-
-void dpp_enrollee_init(void)
-{
-	printf("dpp_enrollee_init00000\r\n");
-    s_dpp_event_group = xEventGroupCreate();
-
-//    ESP_ERROR_CHECK(esp_netif_init());
-//
-//    ESP_ERROR_CHECK(esp_event_loop_create_default());
-//    esp_netif_create_default_wifi_sta();
-
-    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL));
-
-//    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-//    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-
-    ESP_ERROR_CHECK(esp_supp_dpp_init(dpp_enrollee_event_cb));
-    /* Currently only supported method is QR Code */
-//    ESP_ERROR_CHECK(esp_supp_dpp_bootstrap_gen(EXAMPLE_DPP_LISTEN_CHANNEL_LIST, DPP_BOOTSTRAP_QR_CODE,
-//                    EXAMPLE_DPP_BOOTSTRAPPING_KEY, EXAMPLE_DPP_DEVICE_INFO));
-
-//    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-//    ESP_ERROR_CHECK(esp_wifi_start());
-
-    /* Waiting until either the connection is established (WIFI_CONNECTED_BIT) or connection failed for the maximum
-     * number of re-tries (WIFI_FAIL_BIT). The bits are set by event_handler() (see above) */
-    EventBits_t bits = xEventGroupWaitBits(s_dpp_event_group,
-                                           DPP_CONNECTED_BIT | DPP_CONNECT_FAIL_BIT | DPP_AUTH_FAIL_BIT,
-                                           pdFALSE,
-                                           pdFALSE,
-                                           portMAX_DELAY);
-
-    /* xEventGroupWaitBits() returns the bits before the call returned, hence we can test which event actually
-     * happened. */
-    //while(1){
-    	printf("dpp_enrollee_init22222222\r\n");
-//		if (bits & DPP_CONNECTED_BIT) {
-//			ESP_LOGI(TAG, "connected to ap SSID:%s password:%s",
-//					 s_dpp_wifi_config.sta.ssid, s_dpp_wifi_config.sta.password);
-//		} else if (bits & DPP_CONNECT_FAIL_BIT) {
-//			ESP_LOGI(TAG, "Failed to connect to SSID:%s, password:%s",
-//					 s_dpp_wifi_config.sta.ssid, s_dpp_wifi_config.sta.password);
-//		} else if (bits & DPP_AUTH_FAIL_BIT) {
-//			ESP_LOGI(TAG, "DPP Authentication failed after %d retries", s_retry_num);
-//		} else {
-//			ESP_LOGE(TAG, "UNEXPECTED EVENT");
-//		}
-		//vTaskDelay(5000 / portTICK_PERIOD_MS);
-    //}
-
-    esp_supp_dpp_deinit();
-    ESP_ERROR_CHECK(esp_event_handler_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler));
-    ESP_ERROR_CHECK(esp_event_handler_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler));
-    vEventGroupDelete(s_dpp_event_group);
-}
-
+#define CONFIG_EXAMPLE_FIRMWARE_UPGRADE_URL "http://192.168.1.6:8080/hello_world.bin"
+//#define CONFIG_EXAMPLE_FIRMWARE_UPGRADE_URL "http://1.177.221.12:8080/down.wml"
+#define CONFIG_EXAMPLE_OTA_RECV_TIMEOUT 10000
 
 //返回系统总运行时间。参考system/startup_time
 int sys_runtime()
@@ -348,21 +197,22 @@ int wifi_init()
 {
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_t *sta_netif = esp_netif_create_default_wifi_sta();
-    assert(sta_netif);
+
+//    esp_netif_t *sta_netif = esp_netif_create_default_wifi_sta();
+//    assert(sta_netif);
+
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_start());
-
-
     return 0;
 }
-
+char strWifiMac[DEFAULT_SCAN_LIST_SIZE][32] = {0};
 /* Initialize Wi-Fi as sta and set scan method */
 int wifi_scan()
 {
+	ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+	ESP_ERROR_CHECK(esp_wifi_start());
+
     uint16_t number = DEFAULT_SCAN_LIST_SIZE;
     wifi_ap_record_t ap_info[DEFAULT_SCAN_LIST_SIZE];
     uint16_t ap_count = 0;
@@ -377,6 +227,8 @@ int wifi_scan()
 		ESP_LOGI(TAG, "Total APs scanned = %u", ap_count);
 		for (int i = 0; (i < DEFAULT_SCAN_LIST_SIZE) && (i < ap_count); i++) {
 			ESP_LOGI(TAG, "SSID \t\t%s", ap_info[i].ssid);
+			//memcpy(&strWifiMac[i], "%s", ap_info[i].ssid);
+			//printf("strWifiMac[%d]=%s", i, strWifiMac[i]);
 			ESP_LOGI(TAG, "RSSI \t\t%d", ap_info[i].rssi);
 			print_auth_mode(ap_info[i].authmode);
 			if (ap_info[i].authmode != WIFI_AUTH_WEP) {
@@ -387,12 +239,54 @@ int wifi_scan()
 //		vTaskDelay(5000 / portTICK_PERIOD_MS);
 //    }
 
-
 	return 0;
+}
+
+void wifi_scan_stop(void)
+{
+    esp_netif_t *wifi_netif = get_example_netif_from_desc("sta");
+//    ESP_ERROR_CHECK(esp_event_handler_unregister(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &on_wifi_disconnect));
+//    ESP_ERROR_CHECK(esp_event_handler_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, &on_got_ip));
+//#ifdef CONFIG_EXAMPLE_CONNECT_IPV6
+//    ESP_ERROR_CHECK(esp_event_handler_unregister(IP_EVENT, IP_EVENT_GOT_IP6, &on_got_ipv6));
+//    ESP_ERROR_CHECK(esp_event_handler_unregister(WIFI_EVENT, WIFI_EVENT_STA_CONNECTED, &on_wifi_connect));
+//#endif
+    esp_err_t err = esp_wifi_stop();
+    if (err == ESP_ERR_WIFI_NOT_INIT) {
+        return;
+    }
+    ESP_ERROR_CHECK(err);
+    ESP_ERROR_CHECK(esp_wifi_deinit());
+    ESP_ERROR_CHECK(esp_wifi_clear_default_wifi_driver_and_handlers(wifi_netif));
+    esp_netif_destroy(wifi_netif);
+    //s_example_esp_netif = NULL;
 }
 
 int wifi_connect()
 {
+	//ESP_ERROR_CHECK(esp_netif_init());
+	//ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+	if(!gulWifiConnect)
+	{
+
+		/* This helper function configures Wi-Fi or Ethernet, as selected in menuconfig.
+		 * Read "Establishing Wi-Fi or Ethernet Connection" section in
+		 * examples/protocols/README.md for more information about this function.
+		*/
+		ESP_ERROR_CHECK(example_connect());
+
+		gulWifiConnect = 1;
+	}
+	else if(example_connect() == ESP_ERR_INVALID_STATE)
+	{
+
+		ESP_LOGI(TAG, "Wifi is connecting.\r\n");
+		ESP_ERROR_CHECK(example_disconnect());
+		vTaskDelay(2000 / portTICK_PERIOD_MS);
+		ESP_ERROR_CHECK(example_connect());
+
+	}
 	return 0;
 }
 
@@ -745,9 +639,8 @@ static void on_wifi_connect(void *esp_netif, esp_event_base_t event_base,
 static esp_netif_t *wifi_start(void)
 {
     char *desc;
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-
+//    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+//    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     esp_netif_inherent_config_t esp_netif_config = ESP_NETIF_INHERENT_DEFAULT_WIFI_STA();
     // Prefix the interface description with the module TAG
     // Warning: the interface desc is used in tests to capture actual connection details (IP, gw, mask)
@@ -805,158 +698,6 @@ static void wifi_stop(void)
 }
 #endif // CONFIG_EXAMPLE_CONNECT_WIFI
 
-#ifdef CONFIG_EXAMPLE_CONNECT_ETHERNET
-
-#ifdef CONFIG_EXAMPLE_CONNECT_IPV6
-
-/** Event handler for Ethernet events */
-static void on_eth_event(void *esp_netif, esp_event_base_t event_base,
-                         int32_t event_id, void *event_data)
-{
-    switch (event_id) {
-    case ETHERNET_EVENT_CONNECTED:
-        ESP_LOGI(TAG, "Ethernet Link Up");
-        ESP_ERROR_CHECK(esp_netif_create_ip6_linklocal(esp_netif));
-        break;
-    default:
-        break;
-    }
-}
-
-#endif // CONFIG_EXAMPLE_CONNECT_IPV6
-
-static esp_eth_handle_t s_eth_handle = NULL;
-static esp_eth_mac_t *s_mac = NULL;
-static esp_eth_phy_t *s_phy = NULL;
-static esp_eth_netif_glue_handle_t s_eth_glue = NULL;
-
-static esp_netif_t *eth_start(void)
-{
-    char *desc;
-    esp_netif_inherent_config_t esp_netif_config = ESP_NETIF_INHERENT_DEFAULT_ETH();
-    // Prefix the interface description with the module TAG
-    // Warning: the interface desc is used in tests to capture actual connection details (IP, gw, mask)
-    asprintf(&desc, "%s: %s", TAG, esp_netif_config.if_desc);
-    esp_netif_config.if_desc = desc;
-    esp_netif_config.route_prio = 64;
-    esp_netif_config_t netif_config = {
-        .base = &esp_netif_config,
-        .stack = ESP_NETIF_NETSTACK_DEFAULT_ETH
-    };
-    esp_netif_t *netif = esp_netif_new(&netif_config);
-    assert(netif);
-    free(desc);
-
-    eth_mac_config_t mac_config = ETH_MAC_DEFAULT_CONFIG();
-    eth_phy_config_t phy_config = ETH_PHY_DEFAULT_CONFIG();
-    phy_config.phy_addr = CONFIG_EXAMPLE_ETH_PHY_ADDR;
-    phy_config.reset_gpio_num = CONFIG_EXAMPLE_ETH_PHY_RST_GPIO;
-#if CONFIG_EXAMPLE_USE_INTERNAL_ETHERNET
-    mac_config.smi_mdc_gpio_num = CONFIG_EXAMPLE_ETH_MDC_GPIO;
-    mac_config.smi_mdio_gpio_num = CONFIG_EXAMPLE_ETH_MDIO_GPIO;
-    s_mac = esp_eth_mac_new_esp32(&mac_config);
-#if CONFIG_EXAMPLE_ETH_PHY_IP101
-    s_phy = esp_eth_phy_new_ip101(&phy_config);
-#elif CONFIG_EXAMPLE_ETH_PHY_RTL8201
-    s_phy = esp_eth_phy_new_rtl8201(&phy_config);
-#elif CONFIG_EXAMPLE_ETH_PHY_LAN87XX
-    s_phy = esp_eth_phy_new_lan87xx(&phy_config);
-#elif CONFIG_EXAMPLE_ETH_PHY_DP83848
-    s_phy = esp_eth_phy_new_dp83848(&phy_config);
-#endif
-#elif CONFIG_EXAMPLE_USE_SPI_ETHERNET
-    gpio_install_isr_service(0);
-    spi_device_handle_t spi_handle = NULL;
-    spi_bus_config_t buscfg = {
-        .miso_io_num = CONFIG_EXAMPLE_ETH_SPI_MISO_GPIO,
-        .mosi_io_num = CONFIG_EXAMPLE_ETH_SPI_MOSI_GPIO,
-        .sclk_io_num = CONFIG_EXAMPLE_ETH_SPI_SCLK_GPIO,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-    };
-    ESP_ERROR_CHECK(spi_bus_initialize(CONFIG_EXAMPLE_ETH_SPI_HOST, &buscfg, 1));
-#if CONFIG_EXAMPLE_USE_DM9051
-    spi_device_interface_config_t devcfg = {
-        .command_bits = 1,
-        .address_bits = 7,
-        .mode = 0,
-        .clock_speed_hz = CONFIG_EXAMPLE_ETH_SPI_CLOCK_MHZ * 1000 * 1000,
-        .spics_io_num = CONFIG_EXAMPLE_ETH_SPI_CS_GPIO,
-        .queue_size = 20
-    };
-    ESP_ERROR_CHECK(spi_bus_add_device(CONFIG_EXAMPLE_ETH_SPI_HOST, &devcfg, &spi_handle));
-    /* dm9051 ethernet driver is based on spi driver */
-    eth_dm9051_config_t dm9051_config = ETH_DM9051_DEFAULT_CONFIG(spi_handle);
-    dm9051_config.int_gpio_num = CONFIG_EXAMPLE_ETH_SPI_INT_GPIO;
-    s_mac = esp_eth_mac_new_dm9051(&dm9051_config, &mac_config);
-    s_phy = esp_eth_phy_new_dm9051(&phy_config);
-#elif CONFIG_EXAMPLE_USE_W5500
-    spi_device_interface_config_t devcfg = {
-        .command_bits = 16, // Actually it's the address phase in W5500 SPI frame
-        .address_bits = 8,  // Actually it's the control phase in W5500 SPI frame
-        .mode = 0,
-        .clock_speed_hz = CONFIG_EXAMPLE_ETH_SPI_CLOCK_MHZ * 1000 * 1000,
-        .spics_io_num = CONFIG_EXAMPLE_ETH_SPI_CS_GPIO,
-        .queue_size = 20
-    };
-    ESP_ERROR_CHECK(spi_bus_add_device(CONFIG_EXAMPLE_ETH_SPI_HOST, &devcfg, &spi_handle));
-    /* w5500 ethernet driver is based on spi driver */
-    eth_w5500_config_t w5500_config = ETH_W5500_DEFAULT_CONFIG(spi_handle);
-    w5500_config.int_gpio_num = CONFIG_EXAMPLE_ETH_SPI_INT_GPIO;
-    s_mac = esp_eth_mac_new_w5500(&w5500_config, &mac_config);
-    s_phy = esp_eth_phy_new_w5500(&phy_config);
-#endif
-#elif CONFIG_EXAMPLE_USE_OPENETH
-    phy_config.autonego_timeout_ms = 100;
-    s_mac = esp_eth_mac_new_openeth(&mac_config);
-    s_phy = esp_eth_phy_new_dp83848(&phy_config);
-#endif
-
-    // Install Ethernet driver
-    esp_eth_config_t config = ETH_DEFAULT_CONFIG(s_mac, s_phy);
-    ESP_ERROR_CHECK(esp_eth_driver_install(&config, &s_eth_handle));
-#if !CONFIG_EXAMPLE_USE_INTERNAL_ETHERNET
-    /* The SPI Ethernet module might doesn't have a burned factory MAC address, we cat to set it manually.
-       02:00:00 is a Locally Administered OUI range so should not be used except when testing on a LAN under your control.
-    */
-    ESP_ERROR_CHECK(esp_eth_ioctl(s_eth_handle, ETH_CMD_S_MAC_ADDR, (uint8_t[]) {
-        0x02, 0x00, 0x00, 0x12, 0x34, 0x56
-    }));
-#endif
-    // combine driver with netif
-    s_eth_glue = esp_eth_new_netif_glue(s_eth_handle);
-    esp_netif_attach(netif, s_eth_glue);
-
-    // Register user defined event handers
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, &on_got_ip, NULL));
-#ifdef CONFIG_EXAMPLE_CONNECT_IPV6
-    ESP_ERROR_CHECK(esp_event_handler_register(ETH_EVENT, ETHERNET_EVENT_CONNECTED, &on_eth_event, netif));
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_GOT_IP6, &on_got_ipv6, NULL));
-#endif
-
-    esp_eth_start(s_eth_handle);
-    return netif;
-}
-
-static void eth_stop(void)
-{
-    esp_netif_t *eth_netif = get_example_netif_from_desc("eth");
-    ESP_ERROR_CHECK(esp_event_handler_unregister(IP_EVENT, IP_EVENT_ETH_GOT_IP, &on_got_ip));
-#ifdef CONFIG_EXAMPLE_CONNECT_IPV6
-    ESP_ERROR_CHECK(esp_event_handler_unregister(IP_EVENT, IP_EVENT_GOT_IP6, &on_got_ipv6));
-    ESP_ERROR_CHECK(esp_event_handler_unregister(ETH_EVENT, ETHERNET_EVENT_CONNECTED, &on_eth_event));
-#endif
-    ESP_ERROR_CHECK(esp_eth_stop(s_eth_handle));
-    ESP_ERROR_CHECK(esp_eth_del_netif_glue(s_eth_glue));
-    ESP_ERROR_CHECK(esp_eth_driver_uninstall(s_eth_handle));
-    ESP_ERROR_CHECK(s_phy->del(s_phy));
-    ESP_ERROR_CHECK(s_mac->del(s_mac));
-
-    esp_netif_destroy(eth_netif);
-    s_example_esp_netif = NULL;
-}
-
-#endif // CONFIG_EXAMPLE_CONNECT_ETHERNET
 
 esp_netif_t *get_example_netif(void)
 {
@@ -992,7 +733,7 @@ static esp_err_t validate_image_header(esp_app_desc_t *new_app_info)
         ESP_LOGI(TAG, "Running firmware version: %s", running_app_info.version);
     }
 
-#ifndef CONFIG_EXAMPLE_SKIP_VERSION_CHECK
+#ifdef CONFIG_EXAMPLE_SKIP_VERSION_CHECK
     if (memcmp(new_app_info->version, running_app_info.version, sizeof(new_app_info->version)) == 0) {
         ESP_LOGW(TAG, "Current running version is the same as a new. We will not continue the update.");
         return ESP_FAIL;
@@ -1025,14 +766,14 @@ static esp_err_t _http_client_init_cb(esp_http_client_handle_t http_client)
 
 void advanced_ota_example_task(void *pvParameter)
 {
-    ESP_LOGI(TAG, "Starting Advanced OTA example");
-    //CONFIG_EXAMPLE_FIRMWARE_UPGRADE_URL,
-    //CONFIG_EXAMPLE_OTA_RECV_TIMEOUT,
+	gulRunning = 1;
+
+    ESP_LOGI(TAG, "Starting Advanced OTA example!!");
     esp_err_t ota_finish_err = ESP_OK;
     esp_http_client_config_t config = {
-        .url = "http://192.168.1.6:8080/",//"http://1.177.221.12:8080/down.wml",
+        .url = CONFIG_EXAMPLE_FIRMWARE_UPGRADE_URL,
         .cert_pem = (char *)server_cert_pem_start,
-        .timeout_ms = 20000,
+        .timeout_ms = CONFIG_EXAMPLE_OTA_RECV_TIMEOUT,
         .keep_alive_enable = true,
     };
 
@@ -1098,38 +839,38 @@ void advanced_ota_example_task(void *pvParameter)
         // the OTA image was not completely received and user can customise the response to this situation.
         ESP_LOGE(TAG, "Complete data was not received.");
     } else {
-    	ESP_LOGE(TAG, "Complete data was received.");
-//        ota_finish_err = esp_https_ota_finish(https_ota_handle);
-//        if ((err == ESP_OK) && (ota_finish_err == ESP_OK)) {
-//            ESP_LOGI(TAG, "ESP_HTTPS_OTA upgrade successful. Rebooting ...");
-//            vTaskDelay(1000 / portTICK_PERIOD_MS);
-//            esp_restart();
-//        } else {
-//            if (ota_finish_err == ESP_ERR_OTA_VALIDATE_FAILED) {
-//                ESP_LOGE(TAG, "Image validation failed, image is corrupted");
-//            }
-//            ESP_LOGE(TAG, "ESP_HTTPS_OTA upgrade failed 0x%x", ota_finish_err);
-//            vTaskDelete(NULL);
-//        }
+    	ESP_LOGI(TAG, "Complete data was received.");
+        ota_finish_err = esp_https_ota_finish(https_ota_handle);
+        if ((err == ESP_OK) && (ota_finish_err == ESP_OK)) {
+            ESP_LOGI(TAG, "ESP_HTTPS_OTA upgrade successful. Rebooting ...");
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+            esp_restart();
+        } else {
+            if (ota_finish_err == ESP_ERR_OTA_VALIDATE_FAILED) {
+                ESP_LOGE(TAG, "Image validation failed, image is corrupted");
+            }
+            ESP_LOGE(TAG, "ESP_HTTPS_OTA upgrade failed 0x%x", ota_finish_err);
+            vTaskDelete(NULL);
+        }
     }
 
 ota_end:
     esp_https_ota_abort(https_ota_handle);
     ESP_LOGE(TAG, "ESP_HTTPS_OTA upgrade failed");
     vTaskDelete(NULL);
+
+    gulRunning = 0;
 }
 
 //system/ota
-void sys_ota()
+int sys_ota()
 {
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
+	wifi_connect();
 
-    /* This helper function configures Wi-Fi or Ethernet, as selected in menuconfig.
-     * Read "Establishing Wi-Fi or Ethernet Connection" section in
-     * examples/protocols/README.md for more information about this function.
-    */
-    ESP_ERROR_CHECK(example_connect());
+	if(!gulRunning)
+		xTaskCreate(&advanced_ota_example_task, "advanced_ota_example_task", 1024 * 8, NULL, 5, NULL);
+	else
+		ESP_LOGE(TAG, "OTA already Running!");
 
-    xTaskCreate(&advanced_ota_example_task, "advanced_ota_example_task", 1024 * 8, NULL, 5, NULL);
+	return gulRunning;
 }

@@ -95,22 +95,22 @@ static const char *TAG = "i2c-simple-example";
  *
  *
 output:
-CAT1Ä£¿éµÄ¹©µçÊ¹ÄÜ½Å	GPIO7	À­¸ß¹©µç£¬À­µÍ¶Ïµç
-CAT1Ä£¿éµÄ¿ª»ú½Å		GPIO10	°´ÕÕCAT1Ä£¿éµÄSPCÀ´¶¨ÒåÀ­¸ßÊ±Ðò
+CAT1A£?eµA?©µcE?AU½A	GPIO7	A­???©µc£¬A­µI¶Iµc
+CAT1A£?eµA??»u½A		GPIO10	°/OOCAT1A£?eµASPCA/¶¨OaA­??E±?o
 
-ÈýÖá´«¸ÐÆ÷ÖÕ¶Ë¹Ü½Å		GPIO6
-2¸öÖ¸Ê¾µÆ£¬			GPIO8 GPIO9	¾ßÌåÔõÃ´ÁÁµÄ´ý¶¨
+EyOa/«????OO¶E?U½A		GPIO6
+2?oO?E?µ?£¬			GPIO8 GPIO9	??IaOoA/AAµA/y¶¨
 
 input:
-³äµçÖ¸Ê¾½Å			GPIO2	Æ½Ê±À­¸ß£¬³äÂúÀ­µÍ
-µç³ØµçÁ¿¼ì²â½Å		GPIO3	¼ì²âµç³ØµçÑ¹
+³aµcO?E?½A			GPIO2	?½E±A­??£¬³aAuA­µI
+µc³OµcA??i²a½A		GPIO3	?i²aµc³OµcN?
 
 mode:
-ºÍ4GÄ£¿éÍ¨Ñ¶ÓÃ´®¿ÚTX	GPIO4
-ºÍ4GÄ£¿éÍ¨Ñ¶ÓÃ´®¿ÚRX	GPIO5
+?I4GA£?eI¨N¶OA/®?UTX	GPIO4
+?I4GA£?eI¨N¶OA/®?URX	GPIO5
 
-I2CµÄSCL½Å		GPIO18
-I2CµÄSDA½Å		GPIO19
+I2CµASCL½A		GPIO18
+I2CµASDA½A		GPIO19
  *
  */
 
@@ -494,12 +494,12 @@ void hareware_main()
 {
 	temp_init();
 	//gpio_init();
-#if 1
+#if 0
 	uint8_t data[2];
-	ESP_ERROR_CHECK(i2c_master_init());
+	//ESP_ERROR_CHECK(i2c_master_init());
 	ESP_LOGI(TAG, "I2C initialized successfully");
 	/* Read the MPU9250 WHO_AM_I register, on power up the register should have the value 0x71 */
-	ESP_ERROR_CHECK(mpu9250_register_read(MPU9250_WHO_AM_I_REG_ADDR, data, 1));
+	//ESP_ERROR_CHECK(mpu9250_register_read(MPU9250_WHO_AM_I_REG_ADDR, data, 1));
 
 	int cnt = 0;
 	while(1)
@@ -559,7 +559,7 @@ int hardware_battery_get_cap()
 }
 
 
-//²Î¿¼peripherals/wave_gen
+//²I??peripherals/wave_gen
 int hardware_voice_record()
 {
 	return 0;

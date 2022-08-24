@@ -146,7 +146,10 @@ void message_handle()
 	nvs_init();
 	//wifi_init();
 
-	sys_ota();
+//	wifi_connect();
+//	wifi_scan();
+//	sys_ota();
+
 	while(1)
 	{
 		int slRecv = message_recv();
