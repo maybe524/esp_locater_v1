@@ -7,46 +7,14 @@
 #include "driver/uart.h"
 #include "driver/gpio.h"
 #include "esp_timer.h"
-//#include "include/esp_sleep.h"
-/*
-esp_err_t esp_sleep_enable_uart_wakeup(int uart_num)
-
-    Enable wakeup from light sleep using UART.
-
-    Use uart_set_wakeup_threshold function to configure UART wakeup threshold.
-
-    Wakeup from light sleep takes some time, so not every character sent to the UART can be received by the application.
-
-    Note
-
-        ESP32 does not support wakeup from UART2.
-    Return
-
-            ESP_OK on success
-
-            ESP_ERR_INVALID_ARG if wakeup from given UART is not supported
-
-    Parameters
-
-            uart_num: UART port to wake up from
-*/
-
-/* Most development boards have "boot" button attached to GPIO0.
- * You can also change this to another pin.
- */
-#ifndef CONFIG_IDF_TARGET_ESP32C3
-#define BUTTON_GPIO_NUM_DEFAULT     9
-#else
-#define BUTTON_GPIO_NUM_DEFAULT     0
-#endif
 
 /* "Boot" button is active low */
 #define BUTTON_WAKEUP_LEVEL_DEFAULT     0
-
+int gulOnoff = 0;
 void power_test(void)
 {
     /* Configure the button GPIO as input, enable wakeup */
-    const int button_gpio_num = BUTTON_GPIO_NUM_DEFAULT;
+    const int button_gpio_num = 9;
     const int wakeup_level = BUTTON_WAKEUP_LEVEL_DEFAULT;
     gpio_config_t config = {
             .pin_bit_mask = BIT64(button_gpio_num),
@@ -56,13 +24,17 @@ void power_test(void)
     gpio_wakeup_enable(button_gpio_num,
             wakeup_level == 0 ? GPIO_INTR_LOW_LEVEL : GPIO_INTR_HIGH_LEVEL);
 
-    while (true) {
+    while (1) {
         /* Wake up in 2 seconds, or when button is pressed */
 
-        //esp_sleep_enable_timer_wakeup(2000*1000);
-        esp_sleep_enable_gpio_wakeup();
+        //esp_sleep_enable_timer_wakeup(10000*1000);
+        //esp_sleep_enable_gpio_wakeup();
         esp_sleep_enable_uart_wakeup(0);
         //esp_sleep_enable_uart_wakeup(1);
+        //printf("gpio_get_level(%d)%d\r\n", button_gpio_num, gpio_get_level(button_gpio_num));
+
+    	if(!gulOnoff) break;
+
 #if 0
         /* Wait until GPIO goes high */
         if (gpio_get_level(button_gpio_num) == wakeup_level) {
@@ -78,7 +50,7 @@ void power_test(void)
          */
         uart_wait_tx_idle_polling(CONFIG_ESP_CONSOLE_UART_NUM);
 
-        /* Get timestamp before entering sleep */
+    	/* Get timestamp before entering sleep */
         int64_t t_before_us = esp_timer_get_time();
 
         /* Enter sleep mode */
@@ -116,6 +88,12 @@ void common_power_enter_light_sleep_ext()
 {
 //	esp_sleep_enable_uart_wakeup(0);
 	esp_light_sleep_start();
+}
+
+void power_enable(int onoff)
+{
+	gulOnoff = onoff;
+	printf("%s:set power onoff %d\r\n", __FUNCTION__, onoff);
 }
 
 void power_init()

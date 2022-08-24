@@ -3,6 +3,7 @@
 
 #include <time.h>
 #include <sys/time.h>
+#include <stdio.h>
 
 #include "common_hardware.h"
 #include "common_power.h"
