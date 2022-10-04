@@ -157,8 +157,8 @@ void gpio_init(void)
 
 static const int RX_BUF_SIZE = 1024;
 
-#define TXD_PIN (GPIO_NUM_4)
-#define RXD_PIN (GPIO_NUM_5)
+#define TXD_PIN (GPIO_NUM_5)
+#define RXD_PIN (GPIO_NUM_4)
 
 
 
@@ -226,7 +226,7 @@ void uart_4g_init(void)
     uart_param_config(UART_NUM_1, &uart_config);
     uart_set_pin(UART_NUM_1, TXD_PIN, RXD_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
 
-    uart_4g_gpio_init();
+    // uart_4g_gpio_init();
     printf("uart init \r\n");
 }
 

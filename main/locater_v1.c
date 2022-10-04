@@ -7,6 +7,12 @@
 #include "locater_v1.h"
 #include "hardware.h"
 
+#define GPIO_OUTPUT_UART_CAT1_EN    7
+#define GPIO_OUTPUT_UART_CAT1_POWER    10
+
+#define port_tick_rate_ms   portTICK_RATE_MS
+#define port_tick_period_ms  portTICK_PERIOD_MS
+#define v_task_delay  vTaskDelay
 
 /*
 *  //TBD: 经常发生栈溢出，临时把变量放在外边
@@ -61,7 +67,7 @@ static int locater_uart_split_str_bychar(char *p_str, char *p_split_char_s, \
     if (!p_str || !p_split_char_s || !p_split_array || !split_array_size)
         return -1;
 
-    while (1) {
+    while (true) {
         if (split_size > split_array_size)
             break;
         else if (!(*p_head) || (*p_head == '\r') || (*p_head == '\n'))
@@ -72,7 +78,7 @@ static int locater_uart_split_str_bychar(char *p_str, char *p_split_char_s, \
         */
         is_found_one_split = false;
         p_split_char = p_split_char_s;
-        while (1) {
+        while (true) {
             if (!(*p_split_char) || is_need_split_exit)
                 break;
             if (*p_head == *p_split_char) {
@@ -134,7 +140,7 @@ static int locater_uart_check_is_dec_num_str(char *p_dec_num_str)
     /*
     *  去掉字符串前面的回车换行符，和空格
     */
-    while (1) {
+    while (true) {
         if (!(*p) || (*p != '\r' && *p != '\n' && *p != ' '))
             break;
         p++;
@@ -143,7 +149,7 @@ static int locater_uart_check_is_dec_num_str(char *p_dec_num_str)
     /*
     *  判断字符是否是数值，中间遇到空格则判定不合格。
     */
-    while (1) {
+    while (true) {
         if (!(*p))
             break;
         else if ((*p) < '0' || (*p) > '9')
@@ -288,23 +294,29 @@ static void locater_uart_send_atcmd_2_4g_module_utils_print(char *p)
  * @brief 与4G模块的AT指令，并且获取返回的字符串
  * 
  * @param p_at_cmd_str 
- * @param p_result_buff 
- * @param result_buff_size 
+ * @param p_want_result_str 
+ * @param p_raw_result_buff 
+ * @param raw_result_buff_size 
  * @param timeout 
  * @return int 
  */
-static int locater_uart_send_atcmd_2_4g_module(char *p_at_cmd_str, char *p_result_buff, \
-        unsigned int result_buff_size, unsigned int timeout, unsigned int flags)
+static int locater_uart_send_atcmd_2_4g_module(
+        char *p_at_cmd_str, char *p_want_result_str,
+        char *p_raw_result_buff, unsigned int raw_result_buff_size, 
+        unsigned int timeout, unsigned int flags)
 {
     int i = 0;
     bool is_recv_fail = false;
-    unsigned int recv_byte = 0, final_copy_byte = 0;
+    unsigned int recv_byte = 0, all_recv_byte = 0, final_copy_byte = 0, bakup_recv_byte = 0;
     char *p_uart_buff_head = uart_get_recv_buff_head();
     unsigned int uart_buff_head_len = 0;
     unsigned int detect_unused_char = 0;
+    char *p_found_strstr = NULL;
+    bool is_need_wait_r_n = false;
+    unsigned int try_strstr_cnt = 0;
 
-    if (!p_at_cmd_str || !p_result_buff || \
-            !result_buff_size || !timeout)
+    if (!p_at_cmd_str || !p_raw_result_buff || \
+            !raw_result_buff_size || !timeout)
     {
         printf("atcmd_2_4g_module, check argv is invalid\n");
         return -1;
@@ -317,47 +329,71 @@ static int locater_uart_send_atcmd_2_4g_module(char *p_at_cmd_str, char *p_resul
         uart_set_buff_clean();
     }
 
-    memset(p_result_buff, 0, result_buff_size);
+    memset(p_raw_result_buff, 0, raw_result_buff_size);
     uart_write_bytes(UART_NUM_1, p_at_cmd_str, strlen(p_at_cmd_str));
-    while (1) {
-        vTaskDelay(10 / portTICK_PERIOD_MS);
+    while (true) {
+        v_task_delay(10 / port_tick_period_ms);
         recv_byte = uart_get_recv_cnt();
+        all_recv_byte = recv_byte;
         timeout--;
         if (!timeout) {
             printf("at_cmd_2_4g_module, wait at_response timeout!\n");
             is_recv_fail = true;
             break;
         }
-        else if (!recv_byte)
+        else if (!all_recv_byte)
             continue;
-        else if ((recv_byte > 4 && \
-                p_uart_buff_head[recv_byte - 4] == 'O'  && \
-            p_uart_buff_head[recv_byte - 3] == 'K'  && \
-            p_uart_buff_head[recv_byte - 2] == '\r' && \
-            p_uart_buff_head[recv_byte - 1] == '\n') || \
-                (recv_byte > 2 && 
-            p_uart_buff_head[recv_byte - 2] == '\r' && \
-            p_uart_buff_head[recv_byte - 1] == '\n'))
+        // 如果需要等待指定的字符串，并且是曾经查找过子字符串，那么继续等待
+        else if (p_want_result_str && bakup_recv_byte == all_recv_byte && !p_found_strstr)
+            continue;
+        // 如果需要等待执行的字符串，并且字符串里边的字节数有变化，并且没有找到子字符串，那么继续等待
+        else if (p_want_result_str && bakup_recv_byte != all_recv_byte && !p_found_strstr) {
+            p_found_strstr = strstr(p_uart_buff_head, p_want_result_str);
+            printf("atcmd_2_4g_module, try(%02d) found sub str pos: %02d, back_cnt: %02d, cnt: %02d\n", \
+                try_strstr_cnt, p_found_strstr ? p_found_strstr - p_uart_buff_head : 0, \
+                bakup_recv_byte, all_recv_byte);
+            bakup_recv_byte = all_recv_byte;
+            try_strstr_cnt++;
+            continue;
+        }
+        // 如果找到子字符串，那么需要等到完整的字符串，即可退出，即字符串后边有回车换行符
+        else if (p_want_result_str && p_found_strstr && !is_need_wait_r_n) {
+            printf("atcmd_2_4g_module, found sub str done\n");
+            is_need_wait_r_n = true;
+            continue;
+        }
+        // 等待完整的字符串即可
+        else if (is_need_wait_r_n && \
+                (all_recv_byte > 2 && p_uart_buff_head[all_recv_byte - 2] == '\r' && \
+            p_uart_buff_head[all_recv_byte - 1] == '\n'))
+        {
+            printf("atcmd_2_4g_module, wait cmd respone already done\n");
+            break;
+        }
+        else if ((all_recv_byte > 4 && \
+                p_uart_buff_head[all_recv_byte - 4] == 'O'  && p_uart_buff_head[all_recv_byte - 3] == 'K'  && \
+            p_uart_buff_head[all_recv_byte - 2] == '\r' && p_uart_buff_head[all_recv_byte - 1] == '\n') || \
+                (all_recv_byte > 2 && p_uart_buff_head[all_recv_byte - 2] == '\r' && \
+            p_uart_buff_head[all_recv_byte - 1] == '\n'))
         {
             /*
             *  认为一个完整的AT回复是最后有一个OK的字符串，
             *  否则继续等待！
             */
-            printf("atcmd_2_4g_module, wait atcmd done\n");
+            printf("atcmd_2_4g_module, wait cmd respone maybe done\n");
             break;
         }
     }
 
-    final_copy_byte = recv_byte > result_buff_size ? result_buff_size : recv_byte;
-    memcpy(p_result_buff, p_uart_buff_head, final_copy_byte);
+    final_copy_byte = all_recv_byte > raw_result_buff_size ? raw_result_buff_size : all_recv_byte;
+    memcpy(p_raw_result_buff, p_uart_buff_head, final_copy_byte);
     uart_buff_head_len = strlen(p_uart_buff_head);
     printf("/----------------------\n");
     printf("tx %04d byte:\n", strlen(p_at_cmd_str));
     locater_uart_send_atcmd_2_4g_module_utils_print(p_at_cmd_str);
-    printf("rx %04d byte:\n", recv_byte);
+    printf("rx %04d byte:\n", all_recv_byte);
     locater_uart_send_atcmd_2_4g_module_utils_print(p_uart_buff_head);
     printf("----------------------/\n");
-    printf("\n");
 
     return final_copy_byte;
 }
@@ -380,7 +416,7 @@ static int locater_uart_get_csq(struct locater_atres_csq_fmt_s *p_csq)
         return -1;
 
     p_atcmd = "AT+CSQ\r\n";
-    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 1000, 0);
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, NULL, buff, sizeof(buff), 1000, 0);
     if (ret < 0) {
         printf("csq, failed\n");
         return ret;
@@ -440,7 +476,7 @@ static int locater_uart_get_cpsi(struct locater_atres_cpsi_fmt_s *p_cpsi)
         return -1;
 
     p_atcmd = "AT+CPSI?\r\n";
-    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 1000, 0);
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, NULL, buff, sizeof(buff), 1000, 0);
     if (ret < 0) {
         printf("get_cpsi, failed\n");
         return ret;
@@ -503,7 +539,7 @@ static int locater_uart_get_creg(struct locater_atres_creg_fmt_s *p_creg)
         return -1;
 
     p_atcmd = "AT+CREG?\r\n";
-    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 1000, 0);
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, NULL, buff, sizeof(buff), 1000, 0);
     if (ret < 0) {
         printf("creg, failed\n");
         return ret;
@@ -569,7 +605,7 @@ static int locater_uart_get_cereg(struct locater_atres_cereg_fmt_s *p_cereg)
         return -1;
 
     p_atcmd = "AT+CEREG?\r\n";
-    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 1000, 0);
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, NULL, buff, sizeof(buff), 1000, 0);
     if (ret < 0) {
         printf("get_cereg, failed\n");
         return ret;
@@ -639,7 +675,7 @@ static int locater_uart_get_cpin(struct locater_atres_cpin_fmt_s *p_cpin)
         return -1;
 
     p_atcmd = "AT+CPIN?\r\n";
-    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 1000, 0);
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, NULL, buff, sizeof(buff), 1000, 0);
     if (ret < 0) {
         printf("cpin, failed\n");
         return ret;
@@ -696,7 +732,7 @@ static int locater_uart_set_mqtt_start(void)
     int split_count = 0;
 
     p_atcmd = "AT+CMQTTSTART\r\n";
-    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 100000, 0);
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, NULL, buff, sizeof(buff), 100000, 0);
     if (ret < 0) {
         printf("mqtt_start, failed\n");
         return ret;
@@ -735,7 +771,7 @@ static int locater_uart_set_mqtt_stop(void)
     int split_count = 0;
 
     p_atcmd = "AT+CMQTTSTOP\r\n";
-    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 1000, 0);
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, NULL, buff, sizeof(buff), 1000, 0);
     if (ret < 0) {
         printf("mqtt_stop, failed\n");
         return ret;
@@ -775,7 +811,7 @@ static int locater_uart_set_mqtt_accq(void)
     int split_count = 0;
 
     p_atcmd = "AT+CMQTTACCQ=0,\"client\"\r\n";
-    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 1000, 0);
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, NULL, buff, sizeof(buff), 1000, 0);
     if (ret < 0) {
         printf("mqtt_accq, failed\n");
         return ret;
@@ -822,7 +858,7 @@ static int locater_uart_set_mqtt_will_topic(char *p_will_topic)
 
     p_atcmd = "AT+CMQTTWILLTOPIC=0,%d\r\n";
     sprintf(at_cmd_buf, p_atcmd, strlen(p_will_topic));
-    ret = locater_uart_send_atcmd_2_4g_module(at_cmd_buf, buff, sizeof(buff), 1000, 0);
+    ret = locater_uart_send_atcmd_2_4g_module(at_cmd_buf, NULL, buff, sizeof(buff), 1000, 0);
     if (ret < 0) {
         printf("mqtt_will_topic, failed\n");
         return ret;
@@ -849,7 +885,7 @@ static int locater_uart_set_mqtt_will_topic(char *p_will_topic)
         break;
     }
 
-    ret = locater_uart_send_atcmd_2_4g_module(p_will_topic, buff, sizeof(buff), 1000, 0);
+    ret = locater_uart_send_atcmd_2_4g_module(p_will_topic, NULL, buff, sizeof(buff), 1000, 0);
     if (ret < 0) {
         printf("mqtt_will_topic, failed\n");
         return ret;
@@ -889,7 +925,7 @@ static int locater_uart_set_cgdcont_cmnet(void)
     char at_cmd_buf[64] = {0};
 
     p_atcmd = "AT+CGDCONT=1,\"ip\",\"cmnet\"\r\n";
-    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 1000, 0);
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, NULL, buff, sizeof(buff), 1000, 0);
     if (ret < 0) {
         printf("cgdcont_cmnet, failed\n");
         return ret;
@@ -927,7 +963,7 @@ static int locater_uart_set_cgact(void)
     char at_cmd_buf[64] = {0};
 
     p_atcmd = "AT+CGACT=1,1\r\n";
-    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 500000, 0);
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, NULL, buff, sizeof(buff), 500000, 0);
     if (ret < 0) {
         printf("cgact, failed\n");
         return ret;
@@ -971,7 +1007,7 @@ static int locater_uart_get_cgact(struct locater_atres_cgact_fmt_s *p_cgact)
     char *p_status = NULL;
 
     p_atcmd = "AT+CGACT?\r\n";
-    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 1000, 0);
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, NULL, buff, sizeof(buff), 1000, 0);
     if (ret < 0) {
         printf("get_cgact, failed\n");
         return ret;
@@ -1044,7 +1080,7 @@ static int locater_uart_get_cgatt(struct locater_atres_cgatt_fmt_s *p_cgatt)
     char *p_status = NULL;
 
     p_atcmd = "AT+CGATT?\r\n";
-    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 1000, 0);
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, NULL, buff, sizeof(buff), 1000, 0);
     if (ret < 0) {
         printf("get_cgatt, failed\n");
         return ret;
@@ -1103,7 +1139,7 @@ static int locater_uart_set_netopen(void)
     unsigned int err = 0;
 
     p_atcmd = "AT+NETOPEN\r\n";
-    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 1000, 0);
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, NULL, buff, sizeof(buff), 1000, 0);
     if (ret < 0) {
         printf("netopen, failed\n");
         return ret;
@@ -1144,6 +1180,122 @@ static int locater_uart_set_netopen(void)
     return ret;
 }
 
+/**
+ * @brief 打开MQTT之前的准备
+ * 
+ * @param mqtt_handle  [in ] 
+ * @return int 
+ * 
+ * @details 
+ */
+static int locater_uart_set_mqtt_open(int mqtt_handle)
+{
+    int ret;
+    int i = 0, j = 0;
+    char *p_atcmd = NULL;
+    int at_res_line = 0;
+    int split_count = 0;
+    char at_cmd_buf[64] = {0};
+    unsigned int err = 0;
+    unsigned int client = 0;
+    unsigned int connect_err = 0;
+    char *lp_res_want_ack_str = NULL, *lp_res_want_ret_str = NULL;
+    unsigned int at_res_want_ack_str_len = 0, at_res_want_ret_str_len = 0;
+    bool is_res_want_ack_str_ok = false, is_res_want_ret_str_ok = false;
+    char *p_want_result_str = NULL;
+    int client_id = 0;
+
+    // 配置 MQTT SSL 模式和SSL 上下文索引
+    // AT+QMTCFG="ssl",<client_idx>[,<SSL_enable>[,<SSL_ctx_idx>]]
+    // <SSL_enable> 整型。配置 MQTT SSL 模式。
+    // 0 使用普通 TCP 连接
+    // 1 使用 SSL TCP 安全连接
+    p_atcmd = "AT+QMTCFG=\"ssl\",0,0,0\r\n";
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, NULL, buff, sizeof(buff), 1000, 0);
+    if (ret < 0) {
+        printf("mqtt_open, failed\n");
+        return ret;
+    }
+
+    /*
+    * Response
+    * 响应
+    * 若省略可选参数，则查询当前 MQTT SSL 模式以及 SSL 上下
+    * 文索引配置情况：
+    * +QMTCFG: "ssl",<SSL_enable>[,<SSL_ctx_idx>]
+    * OK
+    */
+    ret = -2;
+    lp_res_want_ack_str = "AT+QMTCFG";
+    lp_res_want_ret_str = "OK";
+    at_res_want_ack_str_len = strlen(lp_res_want_ack_str);
+    at_res_want_ret_str_len = strlen(lp_res_want_ret_str);
+    at_res_line = locater_uart_process_at_response(buff, s_locater_atres_array, 32);
+    for (i = 0; i < at_res_line; i++) {
+        printf("mqtt_open, line_%02d, len_%02d: %s\n", i, strlen(s_locater_atres_array[i].atreq_content), \
+            s_locater_atres_array[i].atreq_content);
+
+        if (!strncmp(lp_res_want_ack_str, s_locater_atres_array[i].atreq_content, at_res_want_ack_str_len))
+            is_res_want_ack_str_ok = true;
+        else if (!strncmp(lp_res_want_ret_str, s_locater_atres_array[i].atreq_content, at_res_want_ret_str_len))
+            is_res_want_ret_str_ok = true;
+    }
+    if (!is_res_want_ack_str_ok || !is_res_want_ret_str_ok) {
+        printf("mqtt_open, failed ack: %d, ret: %d\n", is_res_want_ack_str_ok, is_res_want_ret_str_ok);
+        return ret;
+    }
+
+    // MQTT 客户端打开网络。
+    // AT+QMTOPEN=0,"iot-as-mqtt.cn-shanghai.aliyuncs.com",1883
+    // OK
+    p_atcmd = "AT+QMTOPEN=0,\"1.117.221.12\",1883\r\n";
+    p_want_result_str = "+QMTOPEN:";
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, p_want_result_str, buff, sizeof(buff), 1000, 0);
+    if (ret < 0) {
+        printf("mqtt_open, failed\n");
+        return ret;
+    }
+
+    ret = -2;
+    lp_res_want_ack_str = "+QMTOPEN:";
+    at_res_want_ack_str_len = strlen(lp_res_want_ack_str);
+    is_res_want_ack_str_ok = false;
+    at_res_line = locater_uart_process_at_response(buff, s_locater_atres_array, 32);
+    for (i = 0; i < at_res_line; i++) {
+        printf("mqtt_open, line_%02d, len_%02d: %s\n", i, \
+            strlen(s_locater_atres_array[i].atreq_content), \
+            s_locater_atres_array[i].atreq_content);
+
+        if (strncmp(lp_res_want_ack_str, s_locater_atres_array[i].atreq_content, at_res_want_ack_str_len))
+            continue;
+        is_res_want_ack_str_ok = true;
+        break;
+    }
+
+    if (!is_res_want_ack_str_ok) {
+        printf("mqtt_open, not found str: %s\n", lp_res_want_ack_str);
+        return ret;
+    }
+    split_count = locater_uart_split_str_bychar(
+            s_locater_atres_array[i].atreq_content, ",:", s_locater_str_split_array, ARRAY_LEN(s_locater_atres_array));
+    for (j = 0; j < split_count; j++) {
+        printf("mqtt_open, elem_%02d: %s\n", j, s_locater_str_split_array[j].data);
+    }
+    if (split_count < 3) {
+        printf("mqtt_open, split_count is error: %d\n", split_count);
+        return -2;
+    }
+
+    client_id = atoi(s_locater_str_split_array[1].data);
+    err = atoi(s_locater_str_split_array[2].data);
+    printf("mqtt_open, client_id: %d, err: %d\n", client_id, err);
+    ret = err ? -3 : 0;
+
+    printf("mqtt_open, done\n");
+
+    return ret;
+}
+
 static int locater_uart_set_mqtt_connect(void)
 {
     int ret;
@@ -1155,9 +1307,20 @@ static int locater_uart_set_mqtt_connect(void)
     unsigned int err = 0;
     unsigned int client = 0;
     unsigned int connect_err = 0;
+    char *lp_res_want_ack_str = NULL, *lp_res_want_ret_str = NULL;
+    unsigned int at_res_want_ack_str_len = 0, at_res_want_ret_str_len = 0;
+    bool is_res_want_ack_str_ok = false, is_res_want_ret_str_ok = false;
+    int client_id = 0, result = 0, ret_value = 0;
 
-    p_atcmd = "AT+CMQTTCONNECT=0,\"tcp://1.117.221.12:1883\",60,1,\"ABCABCABC\",\"ABCABCABC\"\r\n";
-    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 1000, 0);
+    // AT+QMTCONN=<client_idx>,<clientid>[,<username>,<password>]
+    // 响应
+    // OK
+    // +QMTCONN: <client_idx>,<result>[,<ret_code>]
+    // 若出现任何错误：
+    // ERROR
+    lp_res_want_ack_str = "+QMTCONN:";
+    p_atcmd = "AT+QMTCONN=0,\"mqttx_f7dd04c2\",\"ABCABCABC\",\"ABCABCABC\"\r\n";
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, lp_res_want_ack_str, buff, sizeof(buff), 1000, 0);
     if (ret < 0) {
         printf("mqtt_connect, failed\n");
         return ret;
@@ -1169,31 +1332,56 @@ static int locater_uart_set_mqtt_connect(void)
     *  OK
     */
     ret = -2;
+    is_res_want_ack_str_ok = false;
+    at_res_want_ack_str_len = strlen(lp_res_want_ack_str);
     for (i = 0; i < at_res_line; i++) {
-        printf("mqtt_connect, line_%02d, len_%02d: %s\n", i, strlen(s_locater_atres_array[i].atreq_content), \
+        printf("mqtt_connect, line_%02d, len_%02d: %s\n", i, \
+            strlen(s_locater_atres_array[i].atreq_content), \
             s_locater_atres_array[i].atreq_content);
 
-        if (strncmp("+CMQTTCONNECT", s_locater_atres_array[i].atreq_content, 13))
+        if (strncmp(lp_res_want_ack_str, s_locater_atres_array[i].atreq_content, at_res_want_ack_str_len))
             continue;
-        
-        printf("mqtt_connect, result is ok\n");
-        ret = 0;
+        is_res_want_ack_str_ok = true;
         break;
     }
+    if (!is_res_want_ack_str_ok) {
+        printf("mqtt_connect, do not found key str!\n");
+        return ret;
+    }
 
+    // +QMTCONN: <TCP_connectID>,<result>[,<ret_code>]
+    // <result> 整型。命令执行结果。
+    // 0 数据包发送成功且从服务器接收到 ACK
+    // 1 数据包重传
+    // 2 数据包发送失败
+    // <ret_code> 整型。连接返回码。
+    // 0 接受连接
+    // 1 拒绝连接：不支持的协议版本
+    // 2 拒绝连接：拒绝标识符
+    // 3 拒绝连接：服务器不可用
+    // 4 拒绝连接：用户名或密码错误
+    // 5 拒绝连接：未授权
     split_count = locater_uart_split_str_bychar(
-            s_locater_atres_array[i].atreq_content, ":,", s_locater_str_split_array, ARRAY_LEN(s_locater_atres_array));
+            s_locater_atres_array[i].atreq_content, ",:", s_locater_str_split_array, ARRAY_LEN(s_locater_atres_array));
     for (j = 0; j < split_count; j++) {
         printf("mqtt_connect, elem_%02d: %s\n", j, s_locater_str_split_array[j].data);
     }
-    if (split_count < 3) {
+    if (split_count < 4) {
         printf("mqtt_connect, split_count is error: %d\n", split_count);
         return -2;
     }
 
-    client = atoi(s_locater_str_split_array[1].data);
-    connect_err = atoi(s_locater_str_split_array[2].data);
-    printf("mqtt_connect, client: %d, connect_err: %d\n", client, connect_err);
+    client_id = atoi(s_locater_str_split_array[1].data);
+    result = atoi(s_locater_str_split_array[2].data);
+    ret_value = atoi(s_locater_str_split_array[3].data);
+    printf("mqtt_connect, client_id: %d, result: %d, ret_value: %d\n", client_id, result, ret_value);
+    if (result || ret_value) {
+        printf("mqtt_connect, error result: %d, ret_value: %d\n", result, ret_value);
+        return -3;
+    }
+
+    ret = 0;
+    printf("mqtt_connect, done\n");
 
     return ret;
 }
@@ -1210,7 +1398,7 @@ static int locater_uart_get_pb_done(struct locater_atres_pbdone_fmt_s *p_pb_done
         return -1;
 
     p_atcmd = "\r\n\r\n";
-    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 1000, LOCATER_SEND_AT_CMD_WITHOUT_CLEAN);
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, NULL, buff, sizeof(buff), 1000, LOCATER_SEND_AT_CMD_WITHOUT_CLEAN);
     if (ret < 0) {
         printf("pb_done, failed\n");
         return ret;
@@ -1230,11 +1418,11 @@ static int locater_uart_get_pb_done(struct locater_atres_pbdone_fmt_s *p_pb_done
         /*
         *  找到关键字+CSQ为止
         */
-#if 1
+#if 0
         if (strncmp("PB DONE", s_locater_atres_array[i].atreq_content, 7) && \
                 strncmp("*ATREADY: 1", s_locater_atres_array[i].atreq_content, 11))
 #else
-        if (strncmp("PB DONE", s_locater_atres_array[i].atreq_content, 7))
+        if (strncmp("RDY", s_locater_atres_array[i].atreq_content, 3))
 #endif
             continue;
 
@@ -1296,7 +1484,7 @@ static int locater_uart_get_imei_str(struct locater_atres_cgsn_fmt_s *p_cgsn)
         return -1;
 
     p_atcmd = "AT+CGSN\r\n";
-    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 1000, 0);
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, NULL, buff, sizeof(buff), 1000, 0);
     if (ret < 0) {
         printf("imei_str, failed\n");
         return ret;
@@ -1338,7 +1526,7 @@ static int locater_uart_get_imei_str(struct locater_atres_cgsn_fmt_s *p_cgsn)
             imei_base /= 10;
         }
 
-        printf("imei_str, str : %s, val: %lld\n", p_cgsn->imei_buff, p_cgsn->imei_64);
+        printf("imei_str, str: %s, val: %lld\n", p_cgsn->imei_buff, p_cgsn->imei_64);
         ret = 0;
         break;
     }
@@ -1360,12 +1548,12 @@ static int locater_uart_set_mqtt_subtopic(void)
     unsigned int connect_err = 0;
     unsigned int recv_cnt = 0;
 
-    ///< 1.1　上线订阅主题：订阅主题为SERIAL/#，QoS=1，Retain=0。
-    ///< AT+CMQTTSUBTOPIC=0,11,1		///< 参数依次含义：client_0, 11个字节，QoS=1
-    ///< > AzRxBWxbZ/#	
-
+    // 1.1　上线订阅主题：订阅主题为SERIAL/#，QoS=1，Retain=0。
+    // AT+CMQTTSUBTOPIC=0,11,1		
+    // 参数依次含义：client_0, 11个字节，QoS=1
+    // > AzRxBWxbZ/#
     p_atcmd = "AT+CMQTTSUBTOPIC=0,11,1\r\n";
-    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 1000, 0);
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, NULL, buff, sizeof(buff), 1000, 0);
     if (ret < 0) {
         printf("mqtt_subtopic, failed\n");
         return ret;
@@ -1394,9 +1582,9 @@ static int locater_uart_set_mqtt_subtopic(void)
         return ret;
     }
 
-    ///< 订阅主题
+    // 订阅主题
     sprintf(at_cmd_buf, "%s/#\r\n", s_locater_device_serial_buff);
-    ret = locater_uart_send_atcmd_2_4g_module(at_cmd_buf, buff, sizeof(buff), 1000, 0);
+    ret = locater_uart_send_atcmd_2_4g_module(at_cmd_buf, NULL, buff, sizeof(buff), 1000, 0);
     at_res_line = locater_uart_process_at_response(buff, s_locater_atres_array, 32);
     ret = -2;
     for (i = 0; i < at_res_line; i++) {
@@ -1421,11 +1609,11 @@ static int locater_uart_set_mqtt_subtopic(void)
 }
 
 /**
- * @brief AT+CMQTTSUB=0,14,1			///< 查询是否有这个主题
+ * @brief AT+CMQTTSUB=0,14,1			// 查询是否有这个主题
  * 
  * @return int 
  */
-static int locater_uart_set_mqtt_sub(int client_handle, char *p_topic_str, unsigned int flags)
+static int locater_uart_set_mqtt_sub(int client_handle, char *p_topic_str, int qos, int retain, unsigned int flags)
 {
     int ret;
     int i = 0, j = 0;
@@ -1437,19 +1625,26 @@ static int locater_uart_set_mqtt_sub(int client_handle, char *p_topic_str, unsig
     unsigned int client = 0;
     unsigned int connect_err = 0;
     unsigned int recv_cnt = 0;
+    char *p_res_want_ack_str = NULL, *p_res_want_ret_str = NULL;
+    int client_id = 0, msg_id = 0, result = 0, value = 0;
 
-    ///< 1.1　上线订阅主题：订阅主题为SERIAL/#，QoS=1，Retain=0。
-    ///< AT+CMQTTSUBTOPIC=0,11,1		///< 参数依次含义：client_0, 11个字节，QoS=1
-    ///< > AzRxBWxbZ/#	
-
+    // 1.1　上线订阅主题：订阅主题为SERIAL/#，QoS=1，Retain=0。
+    // AT+CMQTTSUBTOPIC=0,11,1		
+    // 参数依次含义：client_0, 11个字节，QoS=1
+    // > AzRxBWxbZ/#	
+    // 订阅主题。
+    // AT+QMTSUB=0,1,"topic/example",2
+    // OK
+    // +QMTSUB: 0,1,0,2	
     if (client_handle < 0 || !p_topic_str) {
         printf("mqtt_sub, detect argv is error\n");
         return -1;
     }
 
-    p_atcmd = "AT+CMQTTSUB=%d,%d,1\r\n";
-    sprintf(at_cmd_buf, p_atcmd, client_handle, strlen(p_topic_str));
-    ret = locater_uart_send_atcmd_2_4g_module(at_cmd_buf, buff, sizeof(buff), 1000, 0);
+    p_res_want_ack_str = "+QMTSUB:";
+    p_atcmd = "AT+QMTSUB=%d,1,\"%s\",%d\r\n";
+    sprintf(at_cmd_buf, p_atcmd, client_handle, p_topic_str, qos);
+    ret = locater_uart_send_atcmd_2_4g_module(at_cmd_buf, p_res_want_ack_str, buff, sizeof(buff), 1000, 0);
     if (ret < 0) {
         printf("mqtt_sub, failed\n");
         return ret;
@@ -1457,19 +1652,16 @@ static int locater_uart_set_mqtt_sub(int client_handle, char *p_topic_str, unsig
     recv_cnt = ret;
     at_res_line = locater_uart_process_at_response(buff, s_locater_atres_array, 32);
 
-    /*
-    * Response
-    *  <
-    */
     ret = -2;
     for (i = 0; i < at_res_line; i++) {
-        printf("mqtt_sub, line_%02d, len_%02d: %s\n", i, strlen(s_locater_atres_array[i].atreq_content), \
+        printf("mqtt_sub, line_%02d, len_%02d: %s\n", \
+            i, strlen(s_locater_atres_array[i].atreq_content), \
             s_locater_atres_array[i].atreq_content);
 
-        if (strncmp(">", s_locater_atres_array[i].atreq_content, 1))
+        if (strncmp(p_res_want_ack_str, s_locater_atres_array[i].atreq_content, strlen(p_res_want_ack_str)))
             continue;
         
-        printf("mqtt_sub, wait input comunication ok\n");
+        printf("mqtt_sub, wait key str ok\n");
         ret = 0;
         break;
     }
@@ -1477,26 +1669,36 @@ static int locater_uart_set_mqtt_sub(int client_handle, char *p_topic_str, unsig
         printf("mqtt_sub, result is error\n");
         return ret;
     }
-
-    ///< 订阅主题
-    sprintf(at_cmd_buf, "%s\r\n", p_topic_str);
-    ret = locater_uart_send_atcmd_2_4g_module(at_cmd_buf, buff, sizeof(buff), 1000, 0);
-    at_res_line = locater_uart_process_at_response(buff, s_locater_atres_array, 32);
-    ret = -2;
-    for (i = 0; i < at_res_line; i++) {
-        printf("mqtt_sub, line_%02d, len_%02d: %s\n", i, strlen(s_locater_atres_array[i].atreq_content), \
-            s_locater_atres_array[i].atreq_content);
-
-        if (strncmp("OK", s_locater_atres_array[i].atreq_content, 13))
-            continue;
-        
-        printf("mqtt_sub, input content result is ok\n");
-        ret = 0;
-        break;
+    split_count = locater_uart_split_str_bychar(
+            s_locater_atres_array[i].atreq_content, ",:", s_locater_str_split_array, ARRAY_LEN(s_locater_atres_array));
+    for (j = 0; j < split_count; j++) {
+        printf("mqtt_sub, elem_%02d: %s\n", j, s_locater_str_split_array[j].data);
     }
-    if (ret) {
-        printf("mqtt_sub, result is fail\n");
-        return ret;
+    if (split_count < 5) {
+        printf("mqtt_sub, split_count is error: %d\n", split_count);
+        return -2;
+    }
+
+    // +QMTSUB: <TCP_connectID>,<msgID>,<result>[,<value>]
+    // <msgID> 整型。数据包的消息标识符。范围： 1~65535。
+    // <result> 整型。命令执行结果。
+    // 0 数据包发送成功且从服务器接收到 ACK
+    // 1 数据包重传
+    // 2 数据包发送失败
+    // <value> 若<result>=0，则为已确认 QoS 等级的矢量；参数取值 128 表示服务器拒绝订阅；
+    // 若<result>=1，则表示数据包重传次数；
+    // 若<result>=2，则不显示。
+    client_id = atoi(s_locater_str_split_array[1].data);
+    msg_id = atoi(s_locater_str_split_array[2].data);
+    result = atoi(s_locater_str_split_array[3].data);
+    value = atoi(s_locater_str_split_array[4].data);
+
+    printf("mqtt_sub, client_id: %d, msg_id: %d, result: %d, value: %d\n", client_id, msg_id, result, value);
+    if (client_id != client_handle || \
+            msg_id != 1 || result == 2)
+    {
+        printf("mqtt_sub, detect error\n");
+        return -5;
     }
 
     printf("mqtt_sub, done\n");
@@ -1506,7 +1708,7 @@ static int locater_uart_set_mqtt_sub(int client_handle, char *p_topic_str, unsig
 
 
 /**
- * @brief AT+CMQTTTOPIC=0,14			///< 指定发布主题
+ * @brief AT+CMQTTTOPIC=0,14			// 指定发布主题
  * 
  * @return int 
  */
@@ -1523,13 +1725,13 @@ static int locater_uart_set_mqtt_topic(int client_handle, char *p_topic_str, uns
     unsigned int connect_err = 0;
     unsigned int recv_cnt = 0;
 
-    ///< 1.1　上线订阅主题：订阅主题为SERIAL/#，QoS=1，Retain=0。
-    ///< AT+CMQTTSUBTOPIC=0,11,1		///< 参数依次含义：client_0, 11个字节，QoS=1
-    ///< > AzRxBWxbZ/#	
+    // 1.1　上线订阅主题：订阅主题为SERIAL/#，QoS=1，Retain=0。
+    // AT+CMQTTSUBTOPIC=0,11,1		// 参数依次含义：client_0, 11个字节，QoS=1
+    // > AzRxBWxbZ/#	
 
     p_atcmd = "AT+CMQTTSUB=%d,%d,1\r\n";
     sprintf(at_cmd_buf, p_atcmd, client_handle, strlen(p_topic_str));
-    ret = locater_uart_send_atcmd_2_4g_module(at_cmd_buf, buff, sizeof(buff), 1000, 0);
+    ret = locater_uart_send_atcmd_2_4g_module(at_cmd_buf, NULL, buff, sizeof(buff), 1000, 0);
     if (ret < 0) {
         printf("mqtt_topic, failed\n");
         return ret;
@@ -1558,9 +1760,9 @@ static int locater_uart_set_mqtt_topic(int client_handle, char *p_topic_str, uns
         return ret;
     }
 
-    ///< 订阅主题
+    // 订阅主题
     sprintf(at_cmd_buf, "%s\r\n", p_topic_str);
-    ret = locater_uart_send_atcmd_2_4g_module(at_cmd_buf, buff, sizeof(buff), 1000, 0);
+    ret = locater_uart_send_atcmd_2_4g_module(at_cmd_buf, NULL, buff, sizeof(buff), 1000, 0);
     at_res_line = locater_uart_process_at_response(buff, s_locater_atres_array, 32);
     ret = -2;
     for (i = 0; i < at_res_line; i++) {
@@ -1603,13 +1805,13 @@ static int locater_uart_set_mqtt_payload(int client_handle, char *p_payload_str,
     unsigned int connect_err = 0;
     unsigned int recv_cnt = 0;
 
-    ///< 1.1　上线订阅主题：订阅主题为SERIAL/#，QoS=1，Retain=0。
-    ///< AT+CMQTTSUBTOPIC=0,11,1		///< 参数依次含义：client_0, 11个字节，QoS=1
-    ///< > AzRxBWxbZ/#	
+    // 1.1　上线订阅主题：订阅主题为SERIAL/#，QoS=1，Retain=0。
+    // AT+CMQTTSUBTOPIC=0,11,1		// 参数依次含义：client_0, 11个字节，QoS=1
+    // > AzRxBWxbZ/#	
 
     p_atcmd = "AT+CMQTTPAYLOAD=%d,%d\r\n";
     sprintf(at_cmd_buf, p_atcmd, client_handle, strlen(p_payload_str));
-    ret = locater_uart_send_atcmd_2_4g_module(at_cmd_buf, buff, sizeof(buff), 1000, 0);
+    ret = locater_uart_send_atcmd_2_4g_module(at_cmd_buf, NULL, buff, sizeof(buff), 1000, 0);
     if (ret < 0) {
         printf("mqtt_payload, failed\n");
         return ret;
@@ -1638,9 +1840,9 @@ static int locater_uart_set_mqtt_payload(int client_handle, char *p_payload_str,
         return ret;
     }
 
-    ///< 要发布的数据字符串
+    // 要发布的数据字符串
     sprintf(at_cmd_buf, "%s\r\n", s_locater_device_serial_buff);
-    ret = locater_uart_send_atcmd_2_4g_module(at_cmd_buf, buff, sizeof(buff), 1000, 0);
+    ret = locater_uart_send_atcmd_2_4g_module(at_cmd_buf, NULL, buff, sizeof(buff), 1000, 0);
     at_res_line = locater_uart_process_at_response(buff, s_locater_atres_array, 32);
     ret = -2;
     for (i = 0; i < at_res_line; i++) {
@@ -1673,37 +1875,58 @@ static int locater_uart_set_mqtt_payload(int client_handle, char *p_payload_str,
  * @param flags 
  * @return int 
  */
-static int locater_uart_set_mqtt_pub(int client_handle, unsigned int flags)
+static int locater_uart_set_mqtt_pub(int client_handle, char *p_topic_str, char *p_msg_str, int qos, int retain, unsigned int flags)
 {
     int ret;
     int i = 0, j = 0;
     char *p_atcmd = NULL;
     int at_res_line = 0;
     int split_count = 0;
-    char at_cmd_buf[64] = {0};
+    char at_cmd_buf[256] = {0};
     unsigned int err = 0;
-    unsigned int client = 0;
+    unsigned int client_id = 0;
     unsigned int connect_err = 0;
     unsigned int recv_cnt = 0;
+    char *p_res_want_ack_str = NULL, *p_res_want_ret_str = NULL;
+    unsigned int msg_id = 0, result = 0, value = 0;
 
-    ///< 1.1　上线订阅主题：订阅主题为SERIAL/#，QoS=1，Retain=0。
-    ///< AT+CMQTTSUBTOPIC=0,11,1		///< 参数依次含义：client_0, 11个字节，QoS=1
-    ///< > AzRxBWxbZ/#	
+    if (!p_topic_str) {
+        printf("mqtt_pub, detect argv error\n");
+        return -1;
+    }
 
-    p_atcmd = "AT+CMQTTPUB=0,1,60,1\r\n";
-    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 1000, 0);
+    // 1.1　上线订阅主题：订阅主题为SERIAL/#，QoS=1，Retain=0。
+    // AT+CMQTTSUBTOPIC=0,11,1		
+    // 参数依次含义：client_0, 11个字节，QoS=1
+    // > AzRxBWxbZ/#	
+
+    // AT+QMTPUB=<TCP_connectID>,<msgID>,<qos>,<retain>,<topic>,<msg>
+    // <msgID> 整型。数据包的消息标识符。 范围： 0~65535。只有当<qos>=0 时，该参数值为 0。
+    // <qos> 整型。客户端想要发布消息的 QoS 等级。
+    // 0 最多发送一次
+    // 1 最少发送一次
+    // 2 只发送一次
+    // <retain> 整型。消息发送到当前订阅者后，服务器是否保存该消息。
+    // 0 消息发送到当前订阅者后，服务器不保存消息。
+    // 1 消息发送到当前订阅者后，服务器保存消息。
+    // <topic> 字符串类型。待发布主题。 最大长度： 255 字节。
+    // <msg> 字符串类型。待发布消息。 最大长度： 700 字节； 若是在数据模式，最大长度： 1024字节。
+    p_atcmd = "AT+QMTPUB=0,1,%d,%d,\"%s\",\"%s\"\r\n";
+    p_res_want_ack_str = "+QMTPUB:";
+    sprintf(at_cmd_buf, p_atcmd, qos, retain, p_topic_str, p_msg_str);
+    ret = locater_uart_send_atcmd_2_4g_module(at_cmd_buf, p_res_want_ack_str, buff, sizeof(buff), 1000, 0);
     if (ret < 0) {
         printf("mqtt_pub, failed\n");
         return ret;
     }
 
-    at_res_line = locater_uart_process_at_response(buff, s_locater_atres_array, 32);
     ret = -2;
+    at_res_line = locater_uart_process_at_response(buff, s_locater_atres_array, 32);
     for (i = 0; i < at_res_line; i++) {
         printf("mqtt_pub, line_%02d, len_%02d: %s\n", i, strlen(s_locater_atres_array[i].atreq_content), \
             s_locater_atres_array[i].atreq_content);
 
-        if (strncmp("OK", s_locater_atres_array[i].atreq_content, 13))
+        if (strncmp(p_res_want_ack_str, s_locater_atres_array[i].atreq_content, strlen(p_res_want_ack_str)))
             continue;
         
         printf("mqtt_pub, input content result is ok\n");
@@ -1713,6 +1936,28 @@ static int locater_uart_set_mqtt_pub(int client_handle, unsigned int flags)
     if (ret) {
         printf("mqtt_pub, result is fail\n");
         return ret;
+    }
+    split_count = locater_uart_split_str_bychar(
+            s_locater_atres_array[i].atreq_content, ",:", s_locater_str_split_array, ARRAY_LEN(s_locater_atres_array));
+    for (j = 0; j < split_count; j++) {
+        printf("mqtt_pub, elem_%02d: %s\n", j, s_locater_str_split_array[j].data);
+    }
+    if (split_count < 4) {
+        printf("mqtt_pub, split_count is error: %d\n", split_count);
+        return -2;
+    }
+
+    client_id = atoi(s_locater_str_split_array[1].data);
+    msg_id = atoi(s_locater_str_split_array[2].data);
+    result = atoi(s_locater_str_split_array[3].data);
+    value = atoi(s_locater_str_split_array[4].data);
+
+    printf("mqtt_pub, client_id: %d, msg_id: %d, result: %d, value: %d\n", client_id, msg_id, result, value);
+    if (client_id != client_handle || msg_id != 1 || \
+            result == 2)
+    {
+        printf("mqtt_pub, detect error\n");
+        return -5;
     }
 
     printf("mqtt_pub, done\n");
@@ -1738,12 +1983,12 @@ static int locater_uart_set_mqtt_sub_confirm(void)
     unsigned int connect_err = 0;
     unsigned int recv_cnt = 0;
 
-    ///< 1.1　上线订阅主题：订阅主题为SERIAL/#，QoS=1，Retain=0。
-    ///< AT+CMQTTSUBTOPIC=0,11,1		///< 参数依次含义：client_0, 11个字节，QoS=1
-    ///< > AzRxBWxbZ/#	
+    // 1.1　上线订阅主题：订阅主题为SERIAL/#，QoS=1，Retain=0。
+    // AT+CMQTTSUBTOPIC=0,11,1		// 参数依次含义：client_0, 11个字节，QoS=1
+    // > AzRxBWxbZ/#	
 
     p_atcmd = "AT+CMQTTSUB=0\r\n";
-    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 1000, 0);
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, NULL, buff, sizeof(buff), 1000, 0);
     if (ret < 0) {
         printf("mqtt_sub_confirm, failed\n");
         return ret;
@@ -1790,12 +2035,12 @@ static int locater_uart_set_mqtt_willtopic(void)
     unsigned int connect_err = 0;
     unsigned int recv_cnt = 0;
 
-    ///< 1.1　上线订阅主题：订阅主题为SERIAL/#，QoS=1，Retain=0。
-    ///< AT+CMQTTSUBTOPIC=0,11,1		///< 参数依次含义：client_0, 11个字节，QoS=1
-    ///< > AzRxBWxbZ/#	
+    // 1.1　上线订阅主题：订阅主题为SERIAL/#，QoS=1，Retain=0。
+    // AT+CMQTTSUBTOPIC=0,11,1		// 参数依次含义：client_0, 11个字节，QoS=1
+    // > AzRxBWxbZ/#	
 
     p_atcmd = "AT+CMQTTWILLTOPIC=0,15\r\n";
-    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 1000, 0);
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, NULL, buff, sizeof(buff), 1000, 0);
     if (ret < 0) {
         printf("mqtt_willtopic, failed\n");
         return ret;
@@ -1824,9 +2069,9 @@ static int locater_uart_set_mqtt_willtopic(void)
         return ret;
     }
 
-    ///< 订阅主题
+    // 订阅主题
     sprintf(at_cmd_buf, "%sD/0/0\r\n", s_locater_device_serial_buff);
-    ret = locater_uart_send_atcmd_2_4g_module(at_cmd_buf, buff, sizeof(buff), 1000, 0);
+    ret = locater_uart_send_atcmd_2_4g_module(at_cmd_buf, NULL, buff, sizeof(buff), 1000, 0);
     at_res_line = locater_uart_process_at_response(buff, s_locater_atres_array, 32);
     ret = -2;
     for (i = 0; i < at_res_line; i++) {
@@ -1864,12 +2109,12 @@ static int locater_uart_set_mqtt_willmsg(void)
     unsigned int connect_err = 0;
     unsigned int recv_cnt = 0;
 
-    ///< 1.1　上线订阅主题：订阅主题为SERIAL/#，QoS=1，Retain=0。
-    ///< AT+CMQTTSUBTOPIC=0,11,1		///< 参数依次含义：client_0, 11个字节，QoS=1
-    ///< > AzRxBWxbZ/#	
+    // 1.1　上线订阅主题：订阅主题为SERIAL/#，QoS=1，Retain=0。
+    // AT+CMQTTSUBTOPIC=0,11,1		// 参数依次含义：client_0, 11个字节，QoS=1
+    // > AzRxBWxbZ/#	
 
     p_atcmd = "AT+CMQTTWILLMSG=0,1,1\r\n";
-    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, buff, sizeof(buff), 1000, 0);
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, NULL, buff, sizeof(buff), 1000, 0);
     if (ret < 0) {
         printf("mqtt_willmsg, failed\n");
         return ret;
@@ -1898,9 +2143,9 @@ static int locater_uart_set_mqtt_willmsg(void)
         return ret;
     }
 
-    ///< 订阅主题
+    // 订阅主题
     sprintf(at_cmd_buf, "0\r\n");
-    ret = locater_uart_send_atcmd_2_4g_module(at_cmd_buf, buff, sizeof(buff), 1000, 0);
+    ret = locater_uart_send_atcmd_2_4g_module(at_cmd_buf, NULL, buff, sizeof(buff), 1000, 0);
     at_res_line = locater_uart_process_at_response(buff, s_locater_atres_array, 32);
     ret = -2;
     for (i = 0; i < at_res_line; i++) {
@@ -1960,13 +2205,32 @@ static void locater_uart_app_task(void *arg)
     esp_log_level_set(TX_TASK_TAG, ESP_LOG_INFO);
 
 start_que:
-    vTaskDelay(5000 / portTICK_PERIOD_MS);
+    v_task_delay(5000 / port_tick_period_ms);
 LOCATOR_UART_FSM_COM_STEP_ENTRY(0) {
         printf("\n\n");
         printf("//////////////////%04d//////////////////\n", idx++);
         s_is_locater_online = false;
-        
-        ///< 习惯性的输入回车换行
+
+#if 1
+        printf("close 4g module\n");
+        // 不给4G模块供电
+        gpio_set_level(GPIO_OUTPUT_UART_CAT1_EN, 0);
+        gpio_set_level(GPIO_OUTPUT_UART_CAT1_POWER, 0);
+        v_task_delay(1000 / port_tick_rate_ms);
+
+        // 给4G模块供电
+        gpio_set_level(GPIO_OUTPUT_UART_CAT1_EN, 1);
+        v_task_delay(1000 / port_tick_rate_ms);
+
+        // 4G模块上电
+        printf("open 4g module\n");
+        gpio_set_level(GPIO_OUTPUT_UART_CAT1_POWER, 1);
+        v_task_delay(1000 / port_tick_rate_ms);
+        gpio_set_level(GPIO_OUTPUT_UART_CAT1_POWER, 0);
+        v_task_delay(1000 / port_tick_rate_ms);
+#endif
+
+        // 习惯性的输入回车换行，检查上电是否OK
         p_at_cmd_str = "\r\n\r\n";
         uart_write_bytes(UART_NUM_1, p_at_cmd_str, strlen(p_at_cmd_str));
 
@@ -1981,7 +2245,7 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(0) {
     }
 
 LOCATOR_UART_FSM_COM_STEP_ENTRY(1) {
-        ///< 检查SIM在位情况
+        // 检查SIM在位情况
         printf("\r\n\r\n");
         ret = locater_uart_get_cpin(&s_locater_atres_cpin);
         printf("cpin, detect sim ready: %d (%d)\n", s_locater_atres_cpin.is_ready, ret);
@@ -1990,7 +2254,7 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(1) {
             goto start_que;
         }
 
-        ///< 检查信号质量
+        // 检查信号质量
         printf("\r\n\r\n");
         retry_cnt = 500;
         ret = locater_uart_get_csq(&s_locater_csq);
@@ -2004,7 +2268,7 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(1) {
         ret = locater_uart_get_cpsi(&s_locater_atres_cpsi);
         printf("get_cpsi, detect cpsi, (ret: %d)\n", ret);
 
-        ///< 检查网络注册情况
+        // 检查网络注册情况
         printf("\r\n\r\n");
         ret = locater_uart_get_cereg(&s_locater_atres_cereg);
         printf("get_cereg, detect n: %d, status: %d\n", s_locater_atres_cereg.result_code, s_locater_atres_cereg.status);
@@ -2013,7 +2277,7 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(1) {
         else if (retry_cnt) {
             retry_cnt--;
             printf("get_cereg, retry %d!\n", retry_cnt);
-            vTaskDelay(5000 / portTICK_PERIOD_MS);
+            v_task_delay(5000 / port_tick_period_ms);
             goto start_que;
         }
         else {
@@ -2021,7 +2285,7 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(1) {
             goto start_que;
         }
 
-        ///< 设置移动卡接入网络
+        // 设置移动卡接入网络
         printf("\r\n\r\n");
         ret = locater_uart_set_cgdcont_cmnet();
         printf("cgdcont_cmnet, detect cgdcont cmnet ret: %d\n", ret);
@@ -2037,7 +2301,7 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(1) {
         if ((ret && retry_cnt) || s_locater_atres_cgact.status != 1) {
             retry_cnt--;
             printf("get_cgact, retry: %d\n", retry_cnt);
-            vTaskDelay(5000 / portTICK_PERIOD_MS);
+            v_task_delay(5000 / port_tick_period_ms);
             goto start_que;
         }
         else if (ret && !retry_cnt) {
@@ -2045,7 +2309,7 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(1) {
             goto start_que;
         }
 
-        ///< CGACT激活网络。AT+CGACT之前先查询一下，返回为1才执行CGACT
+        // CGACT激活网络。AT+CGACT之前先查询一下，返回为1才执行CGACT
         printf("\r\n\r\n");
         ret = locater_uart_set_cgact();
         printf("cgact, detect set cgact ret: %d\n", ret);
@@ -2061,26 +2325,6 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(1) {
     }
 
 LOCATOR_UART_FSM_COM_STEP_ENTRY(2) {
-        ///< 启动MQTT
-        printf("\r\n\r\n");
-        ret = locater_uart_set_mqtt_start();
-        printf("detect mqtt start result: %d\n", ret);
-        if (ret) {
-            ret = locater_uart_set_mqtt_stop();
-            printf("detect mqtt stop result: %d\n", ret);
-            goto start_que;
-        }
-
-        ///< 创建一个MQTT客户端
-        printf("\r\n\r\n");
-        ret = locater_uart_set_mqtt_accq();
-        printf("mqtt_accq, detect mqtt create client result: %d\n", ret);
-        if (ret) {
-            ret = locater_uart_set_mqtt_stop();
-            printf("mqtt_accq, detect mqtt stop result: %d\n", ret);
-            goto start_que;
-        }
-
         printf("\r\n\r\n");
         ret = locater_uart_get_imei_str(&s_locater_atres_cgsn);
         printf("imei_str, str result: %s\n", s_locater_atres_cgsn.imei_buff);
@@ -2088,37 +2332,33 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(2) {
         locater_uart_get_device_serial_by_imei(s_locater_atres_cgsn.imei_64, s_locater_device_serial_buff, sizeof(s_locater_device_serial_buff));
         printf("device_serial, str result: %s\n", s_locater_device_serial_buff);
 
-        ///<  MQTT连接
+        ret = locater_uart_set_mqtt_open(0);
+
+        //  MQTT连接
         printf("\r\n\r\n");
         ret = locater_uart_set_mqtt_connect();
         printf("mqtt_connect, detect mqtt connect result: %d\n", ret);
         if (ret) {
-            ret = locater_uart_set_mqtt_stop();
             printf("mqtt_connect, retry mqtt connect\n");
             goto start_que;
         }
 
-        ret = locater_uart_set_mqtt_subtopic();
-        ret = locater_uart_set_mqtt_sub_confirm();
+        // 上线订阅主题：订阅主题为SERIAL/#，QoS=1，Retain=0。
+        printf("\r\n\r\n");
+        sprintf(mqtt_topic_str_buf, "%s/#", s_locater_device_serial_buff);
+        ret = locater_uart_set_mqtt_sub(client_handle, mqtt_topic_str_buf, 1, 0, 0);
 
-        ret = locater_uart_set_mqtt_willtopic();
-        ret = locater_uart_set_mqtt_willmsg();
-
-        ///< 上线通知服务器
+        // 上线通知服务器
+        printf("\r\n\r\n");
         sprintf(mqtt_topic_str_buf, "%sD/0/0", s_locater_device_serial_buff);
-        ret = locater_uart_set_mqtt_sub(client_handle, mqtt_topic_str_buf, 0);
-
-        ret = locater_uart_set_mqtt_topic(client_handle, mqtt_topic_str_buf, 0);
-
-        sprintf(mqtt_payload_str_buf, "%s", "1");
-        ret = locater_uart_set_mqtt_payload(client_handle, mqtt_payload_str_buf, 0);
-
-        ret = locater_uart_set_mqtt_pub(client_handle, 0);
+        ret = locater_uart_set_mqtt_pub(client_handle, mqtt_topic_str_buf, "1", 1, 1, 0);
+        while (1) {v_task_delay(5000 / port_tick_period_ms);}
         s_is_locater_online = true;
         step++;
     }
 
 LOCATOR_UART_FSM_COM_STEP_ENTRY(3) {
+#if 0
         temperature = locater_uart_get_temperature();
         if (temperature > s_locater_temperature_threshold_high) {
             sprintf(mqtt_topic_str_buf, "%sD/%d/122", s_locater_device_serial_buff, 251);
@@ -2145,11 +2385,11 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(3) {
             ret = locater_uart_set_mqtt_payload(client_handle, mqtt_payload_str_buf, 0);
             ret = locater_uart_set_mqtt_pub(client_handle, 0);
         }
-
+#endif
         /*
         *  间隔几分钟检查一次网络
         */
-        vTaskDelay(100000 / portTICK_PERIOD_MS);
+        v_task_delay(100000 / port_tick_period_ms);
         step = 1;
         step_bakup = 3;
         goto start_que;
@@ -2160,7 +2400,7 @@ int locater_uart_init(void)
 {
     xTaskCreate(locater_uart_app_task, \
         "uart_locater_uart_device_online_conf_task", 
-        1024*2, NULL, configMAX_PRIORITIES-1, NULL);
+        1024*4, NULL, configMAX_PRIORITIES-1, NULL);
 
     return 0;
 }
