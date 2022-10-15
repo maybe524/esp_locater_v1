@@ -260,6 +260,9 @@ static void locater_uart_send_atcmd_2_4g_module_utils_print(char *p)
 {
     bool is_need_printf_n = false;
 
+    if (!p)
+        return;
+
     /*
     *  去掉字符串首的回车换行符
     */
@@ -300,10 +303,8 @@ static void locater_uart_send_atcmd_2_4g_module_utils_print(char *p)
  * @param timeout 
  * @return int 
  */
-static int locater_uart_send_atcmd_2_4g_module(
-        char *p_at_cmd_str, char *p_want_result_str,
-        char *p_raw_result_buff, unsigned int raw_result_buff_size, 
-        unsigned int timeout, unsigned int flags)
+static int locater_uart_send_atcmd_2_4g_module(char *p_at_cmd_str, char *p_want_result_str,
+        char *p_raw_result_buff, unsigned int raw_result_buff_size, unsigned int timeout, unsigned int flags)
 {
     int i = 0;
     bool is_recv_fail = false;
@@ -314,9 +315,10 @@ static int locater_uart_send_atcmd_2_4g_module(
     char *p_found_strstr = NULL;
     bool is_need_wait_r_n = false;
     unsigned int try_strstr_cnt = 0;
+    static unsigned long dump_idx = 0;
 
-    if (!p_at_cmd_str || !p_raw_result_buff || \
-            !raw_result_buff_size || !timeout)
+    if ((!locater_check_flags_32(&flags, LOCATER_SEND_AT_CMD_DIRECT_WAIT_RESULT) && !p_at_cmd_str) || \
+            !p_raw_result_buff || !raw_result_buff_size)
     {
         printf("atcmd_2_4g_module, check argv is invalid\n");
         return -1;
@@ -329,8 +331,16 @@ static int locater_uart_send_atcmd_2_4g_module(
         uart_set_buff_clean();
     }
 
+    timeout = !timeout ? 1000 : timeout;
     memset(p_raw_result_buff, 0, raw_result_buff_size);
-    uart_write_bytes(UART_NUM_1, p_at_cmd_str, strlen(p_at_cmd_str));
+
+    /*
+    *  直接等待结果不需要发送AT指令
+    */
+    if (!locater_check_flags_32(&flags, LOCATER_SEND_AT_CMD_DIRECT_WAIT_RESULT)) {
+        uart_write_bytes(UART_NUM_1, p_at_cmd_str, strlen(p_at_cmd_str));
+    }
+
     while (true) {
         v_task_delay(10 / port_tick_period_ms);
         recv_byte = uart_get_recv_cnt();
@@ -389,7 +399,8 @@ static int locater_uart_send_atcmd_2_4g_module(
     memcpy(p_raw_result_buff, p_uart_buff_head, final_copy_byte);
     uart_buff_head_len = strlen(p_uart_buff_head);
     printf("/----------------------\n");
-    printf("tx %04d byte:\n", strlen(p_at_cmd_str));
+    printf("idx: %04d\n", dump_idx++);
+    printf("tx %04d byte:\n", p_at_cmd_str ? strlen(p_at_cmd_str) : 0);
     locater_uart_send_atcmd_2_4g_module_utils_print(p_at_cmd_str);
     printf("rx %04d byte:\n", all_recv_byte);
     locater_uart_send_atcmd_2_4g_module_utils_print(p_uart_buff_head);
@@ -1319,7 +1330,7 @@ static int locater_uart_set_mqtt_connect(void)
     // 若出现任何错误：
     // ERROR
     lp_res_want_ack_str = "+QMTCONN:";
-    p_atcmd = "AT+QMTCONN=0,\"mqttx_f7dd04c2\",\"ABCABCABC\",\"ABCABCABC\"\r\n";
+    p_atcmd = "AT+QMTCONN=0,\"wPkWCaQVZ\",\"ABCABCABC\",\"ABCABCABC\"\r\n";
     ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, lp_res_want_ack_str, buff, sizeof(buff), 1000, 0);
     if (ret < 0) {
         printf("mqtt_connect, failed\n");
@@ -1706,6 +1717,68 @@ static int locater_uart_set_mqtt_sub(int client_handle, char *p_topic_str, int q
     return ret;
 }
 
+
+/**
+ * @brief AT+CMQTTSUB=0,14,1			// 查询是否有这个主题
+ * 
+ * @return int 
+ */
+static int locater_uart_set_mqtt_will(int client_handle, 
+        char *p_will_topic_str, char *p_will_payload_str, int qos, int retain, unsigned int flags)
+{
+    int ret;
+    int i = 0, j = 0;
+    char *p_atcmd = NULL;
+    int at_res_line = 0;
+    int split_count = 0;
+    char at_cmd_buf[128] = {0};
+    unsigned int err = 0;
+    unsigned int client = 0;
+    unsigned int connect_err = 0;
+    unsigned int recv_cnt = 0;
+    char *p_res_want_ack_str = NULL, *p_res_want_ret_str = NULL;
+    int client_id = 0, msg_id = 0, result = 0, value = 0;
+    bool is_res_want_ack_ok = false, is_res_want_ret_ok = false;
+    unsigned int will_fg = 1;
+
+    // 1.2　Will消息设置：消息主题：SERIAL+“D/0/0” ，Payload=‘0’，QoS=1，Retain=1。
+    if (client_handle < 0 || !p_will_topic_str || !p_will_payload_str) {
+        printf("mqtt_will, detect argv is error\n");
+        return -1;
+    }
+
+    p_atcmd = "AT+QMTCFG=\"will\",%d,%d,%d,%d,\"%s\",\"%s\"\r\n";
+    p_res_want_ack_str = "+QMTCFG:";
+    sprintf(at_cmd_buf, p_atcmd, client_handle, will_fg, qos, retain, p_will_topic_str, p_will_payload_str);
+    ret = locater_uart_send_atcmd_2_4g_module(at_cmd_buf, p_res_want_ack_str, buff, sizeof(buff), 1000, 0);
+    if (ret < 0) {
+        printf("mqtt_will, failed\n");
+        return ret;
+    }
+    recv_cnt = ret;
+    at_res_line = locater_uart_process_at_response(buff, s_locater_atres_array, 32);
+
+    ret = -2;
+    p_res_want_ret_str = "OK";
+    for (i = 0; i < at_res_line; i++) {
+        printf("mqtt_will, line_%02d, len_%02d: %s\n", \
+            i, strlen(s_locater_atres_array[i].atreq_content), \
+            s_locater_atres_array[i].atreq_content);
+
+        if (!strncmp(p_res_want_ack_str, s_locater_atres_array[i].atreq_content, strlen(p_res_want_ack_str)))
+            is_res_want_ack_ok = true;
+        if (!strncmp(p_res_want_ret_str, s_locater_atres_array[i].atreq_content, strlen(p_res_want_ret_str)))
+            is_res_want_ret_ok = true;
+    }
+    if (!is_res_want_ack_ok || !is_res_want_ret_ok) {
+        printf("mqtt_will, result is error\n");
+        return ret;
+    }
+
+    printf("mqtt_will, done\n");
+
+    return ret;
+}
 
 /**
  * @brief AT+CMQTTTOPIC=0,14			// 指定发布主题
@@ -2199,8 +2272,9 @@ static void locater_uart_app_task(void *arg)
     unsigned int battery_level = 0;
     unsigned int temperature = 0;
     bool is_need_upload_service = false;
-    char mqtt_topic_str_buf[32] = {0};
-    char mqtt_payload_str_buf[32] = {0};
+    char mqtt_topic_str_buf[256] = {0}, mqtt_payload_str_buf[256] = {0};
+    unsigned int mqtt_payload_qos = 0, mqtt_payload_retain = 0, mqtt_flags = 0;
+    char *p_serial = "ABCABCABC";
 
     esp_log_level_set(TX_TASK_TAG, ESP_LOG_INFO);
 
@@ -2329,7 +2403,8 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(2) {
         ret = locater_uart_get_imei_str(&s_locater_atres_cgsn);
         printf("imei_str, str result: %s\n", s_locater_atres_cgsn.imei_buff);
         locater_assert(ret);
-        locater_uart_get_device_serial_by_imei(s_locater_atres_cgsn.imei_64, s_locater_device_serial_buff, sizeof(s_locater_device_serial_buff));
+        locater_uart_get_device_serial_by_imei(s_locater_atres_cgsn.imei_64, s_locater_device_serial_buff, \
+            sizeof(s_locater_device_serial_buff));
         printf("device_serial, str result: %s\n", s_locater_device_serial_buff);
 
         ret = locater_uart_set_mqtt_open(0);
@@ -2345,14 +2420,40 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(2) {
 
         // 上线订阅主题：订阅主题为SERIAL/#，QoS=1，Retain=0。
         printf("\r\n\r\n");
-        sprintf(mqtt_topic_str_buf, "%s/#", s_locater_device_serial_buff);
+        sprintf(mqtt_topic_str_buf, "%s/#", p_serial);
         ret = locater_uart_set_mqtt_sub(client_handle, mqtt_topic_str_buf, 1, 0, 0);
+
+        // 上线订阅will消息， Will消息设置：消息主题：SERIAL+“D/0/0” ，Payload=‘0’，QoS=1，Retain=1。
+        printf("\r\n\r\n");
+        sprintf(mqtt_topic_str_buf, "%s/#", p_serial);
+        sprintf(mqtt_payload_str_buf, "%s", "0");
+        mqtt_payload_qos = 1;
+        mqtt_payload_retain = 1;
+        ret = locater_uart_set_mqtt_will(client_handle, mqtt_topic_str_buf, mqtt_payload_str_buf, \
+            mqtt_payload_qos, mqtt_payload_retain, 0);
 
         // 上线通知服务器
         printf("\r\n\r\n");
-        sprintf(mqtt_topic_str_buf, "%sD/0/0", s_locater_device_serial_buff);
+        sprintf(mqtt_topic_str_buf, "%sD/0/0", p_serial);
         ret = locater_uart_set_mqtt_pub(client_handle, mqtt_topic_str_buf, "1", 1, 1, 0);
-        while (1) {v_task_delay(5000 / port_tick_period_ms);}
+
+        retry_cnt = 0;
+        while (1) {
+            printf("\r\n\r\n");
+            sprintf(mqtt_topic_str_buf, "%sD/3/62", p_serial);
+            mqtt_payload_qos = 1;
+            mqtt_payload_retain = 0;
+            ret = locater_uart_set_mqtt_pub(client_handle, mqtt_topic_str_buf, "1", mqtt_payload_qos, mqtt_payload_retain, 0);
+
+            if (retry_cnt == 0)
+                mqtt_flags = LOCATER_SEND_AT_CMD_DIRECT_WAIT_RESULT;
+            else
+                mqtt_flags = LOCATER_SEND_AT_CMD_DIRECT_WAIT_RESULT | LOCATER_SEND_AT_CMD_WITHOUT_CLEAN;
+            locater_uart_send_atcmd_2_4g_module(NULL, NULL, mqtt_payload_str_buf, \
+                sizeof(mqtt_payload_str_buf), 1000, mqtt_flags);
+            v_task_delay(5000 / port_tick_period_ms);
+            retry_cnt++;
+        }
         s_is_locater_online = true;
         step++;
     }

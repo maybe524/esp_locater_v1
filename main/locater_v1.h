@@ -19,6 +19,9 @@
 
 typedef enum {
     LOCATER_SEND_AT_CMD_WITHOUT_CLEAN   = (1 << 0),
+
+    // 直接等待结果
+    LOCATER_SEND_AT_CMD_DIRECT_WAIT_RESULT     = (1 << 1),
 } locater_send_atcmd_2_4g_module_flags_e;
 
 typedef struct locater_atres_fmt_s {
