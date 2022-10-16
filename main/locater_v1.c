@@ -6,6 +6,7 @@
 #include "driver/gpio.h"
 #include "locater_v1.h"
 #include "hardware.h"
+#include "protocol.h"
 
 #define GPIO_OUTPUT_UART_CAT1_EN    7
 #define GPIO_OUTPUT_UART_CAT1_POWER    10
@@ -2278,16 +2279,16 @@ static void locater_uart_app_task(void *arg)
 
     esp_log_level_set(TX_TASK_TAG, ESP_LOG_INFO);
 
-start_que:
-    v_task_delay(5000 / port_tick_period_ms);
+    while (true) {
+    // 处理4G模块上电过程
 LOCATOR_UART_FSM_COM_STEP_ENTRY(0) {
         printf("\n\n");
         printf("//////////////////%04d//////////////////\n", idx++);
         s_is_locater_online = false;
 
-#if 1
         printf("close 4g module\n");
         // 不给4G模块供电
+        v_task_delay(5000 / port_tick_period_ms);
         gpio_set_level(GPIO_OUTPUT_UART_CAT1_EN, 0);
         gpio_set_level(GPIO_OUTPUT_UART_CAT1_POWER, 0);
         v_task_delay(1000 / port_tick_rate_ms);
@@ -2302,7 +2303,6 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(0) {
         v_task_delay(1000 / port_tick_rate_ms);
         gpio_set_level(GPIO_OUTPUT_UART_CAT1_POWER, 0);
         v_task_delay(1000 / port_tick_rate_ms);
-#endif
 
         // 习惯性的输入回车换行，检查上电是否OK
         p_at_cmd_str = "\r\n\r\n";
@@ -2312,12 +2312,13 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(0) {
         printf("pb_done, detect pb_done ready: %d (%d)\n", s_locater_atres_pbdone.is_power_on_done, ret);
         if (ret < 0 || !s_locater_atres_pbdone.is_power_on_done) {
             printf("pb_done, retry\n");
-            goto start_que;
+            continue;
         }
         step_bakup = 0;
         step++;
-    }
+      }
 
+    // 检查网络情况
 LOCATOR_UART_FSM_COM_STEP_ENTRY(1) {
         // 检查SIM在位情况
         printf("\r\n\r\n");
@@ -2325,7 +2326,8 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(1) {
         printf("cpin, detect sim ready: %d (%d)\n", s_locater_atres_cpin.is_ready, ret);
         if (!s_locater_atres_cpin.is_ready) {
             printf("cpin, retry!\n");
-            goto start_que;
+            v_task_delay(5000 / port_tick_period_ms);
+            continue;
         }
 
         // 检查信号质量
@@ -2335,7 +2337,8 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(1) {
         printf("csq, detect query signal quality, rssi: %d, ber: %d (ret: %d)\n", s_locater_csq.rssi, s_locater_csq.ber, ret);
         if (ret || (s_locater_csq.rssi < 0) || (s_locater_csq.rssi > 31)) {
             printf("csq, retry!\n");
-            goto start_que;
+            v_task_delay(5000 / port_tick_period_ms);
+            continue;
         }
 
         printf("\r\n\r\n");
@@ -2352,11 +2355,11 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(1) {
             retry_cnt--;
             printf("get_cereg, retry %d!\n", retry_cnt);
             v_task_delay(5000 / port_tick_period_ms);
-            goto start_que;
+            continue;
         }
         else {
             printf("get_cereg, final fail after retry!\n", ret);
-            goto start_que;
+            continue;
         }
 
         // 设置移动卡接入网络
@@ -2365,7 +2368,7 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(1) {
         printf("cgdcont_cmnet, detect cgdcont cmnet ret: %d\n", ret);
         if (ret) {
             printf("cgdcont_cmnet, retry\n", ret);
-            goto start_que;
+            continue;
         }
 
         printf("\r\n\r\n");
@@ -2376,11 +2379,11 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(1) {
             retry_cnt--;
             printf("get_cgact, retry: %d\n", retry_cnt);
             v_task_delay(5000 / port_tick_period_ms);
-            goto start_que;
+            continue;
         }
         else if (ret && !retry_cnt) {
             printf("get_cgact, final fail after retry!\n", ret);
-            goto start_que;
+            continue;
         }
 
         // CGACT激活网络。AT+CGACT之前先查询一下，返回为1才执行CGACT
@@ -2389,15 +2392,16 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(1) {
         printf("cgact, detect set cgact ret: %d\n", ret);
         if (ret) {
             printf("set_cgact, retry!\n", ret);
-            goto start_que;
+            continue;
         }
 
         if (step_bakup)
             step = step_bakup;
         else
             step++;
-    }
+      }
 
+    // 订阅消息
 LOCATOR_UART_FSM_COM_STEP_ENTRY(2) {
         printf("\r\n\r\n");
         ret = locater_uart_get_imei_str(&s_locater_atres_cgsn);
@@ -2415,7 +2419,7 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(2) {
         printf("mqtt_connect, detect mqtt connect result: %d\n", ret);
         if (ret) {
             printf("mqtt_connect, retry mqtt connect\n");
-            goto start_que;
+            continue;
         }
 
         // 上线订阅主题：订阅主题为SERIAL/#，QoS=1，Retain=0。
@@ -2438,70 +2442,106 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(2) {
         ret = locater_uart_set_mqtt_pub(client_handle, mqtt_topic_str_buf, "1", 1, 1, 0);
 
         retry_cnt = 0;
-        while (1) {
-            printf("\r\n\r\n");
-            sprintf(mqtt_topic_str_buf, "%sD/3/62", p_serial);
-            mqtt_payload_qos = 1;
-            mqtt_payload_retain = 0;
-            ret = locater_uart_set_mqtt_pub(client_handle, mqtt_topic_str_buf, "1", mqtt_payload_qos, mqtt_payload_retain, 0);
-
-            if (retry_cnt == 0)
-                mqtt_flags = LOCATER_SEND_AT_CMD_DIRECT_WAIT_RESULT;
-            else
-                mqtt_flags = LOCATER_SEND_AT_CMD_DIRECT_WAIT_RESULT | LOCATER_SEND_AT_CMD_WITHOUT_CLEAN;
-            locater_uart_send_atcmd_2_4g_module(NULL, NULL, mqtt_payload_str_buf, \
-                sizeof(mqtt_payload_str_buf), 1000, mqtt_flags);
-            v_task_delay(5000 / port_tick_period_ms);
-            retry_cnt++;
-        }
         s_is_locater_online = true;
         step++;
-    }
+      }
 
+    /*
+    *  主程序处理消息事件，对于一些事件进行处理
+    */
 LOCATOR_UART_FSM_COM_STEP_ENTRY(3) {
-#if 0
-        temperature = locater_uart_get_temperature();
-        if (temperature > s_locater_temperature_threshold_high) {
-            sprintf(mqtt_topic_str_buf, "%sD/%d/122", s_locater_device_serial_buff, 251);
-            is_need_upload_service = true;
-        }
-        else if (temperature < s_locater_temperature_threshold_low) {
-            sprintf(mqtt_topic_str_buf, "%sD/%d/222", s_locater_device_serial_buff, 251);
-            is_need_upload_service = true;
-        }
-        if (is_need_upload_service) {
-            ret = locater_uart_set_mqtt_sub(client_handle, mqtt_topic_str_buf, 0);
-            ret = locater_uart_set_mqtt_topic(client_handle, mqtt_topic_str_buf, 0);
-            memset(mqtt_payload_str_buf, 0, sizeof(mqtt_payload_str_buf));
-            ret = locater_uart_set_mqtt_payload(client_handle, mqtt_payload_str_buf, 0);
-            ret = locater_uart_set_mqtt_pub(client_handle, 0);
+        struct uart_event_que_s *uart_event = NULL;
+        unsigned int event_count = 0, split_count = 0;
+        unsigned int split_index = 0, payload_len = 0;
+        unsigned int client_idx = 0, msg_id = 0, recv_id = 0, err_code = 0;
+        char *p_topic = NULL, *p_payload = NULL;
+
+        event_count = uart_event_get_busy_item_count();
+        if (!event_count) {
+            printf("main, detect curr event count is zero\n");
+            v_task_delay(1000 / port_tick_period_ms);
+            continue;
         }
 
-        collision_alarm = locater_uart_get_collision();
-        if (collision_alarm) {
-            sprintf(mqtt_topic_str_buf, "%sD/%d/42", s_locater_device_serial_buff, 188);
-            ret = locater_uart_set_mqtt_sub(client_handle, mqtt_topic_str_buf, 0);
-            ret = locater_uart_set_mqtt_topic(client_handle, mqtt_topic_str_buf, 0);
-            memset(mqtt_payload_str_buf, 0, sizeof(mqtt_payload_str_buf));
-            ret = locater_uart_set_mqtt_payload(client_handle, mqtt_payload_str_buf, 0);
-            ret = locater_uart_set_mqtt_pub(client_handle, 0);
+        uart_event = uart_event_get_item();
+        if (!uart_event) {
+            printf("main, detect event_event is error\n");
+            v_task_delay(1000 / port_tick_period_ms);
+            continue;
         }
-#endif
+
+        /*
+        *  [1] +QMTSTAT: <client_idx>,<err_code>当 MQTT 链路层状态改变，客户端会断开
+        *  MQTT 连接并上报 URC。
+        *  [2] +QMTRECV: <client_idx>,<msgid>,<topic>[,<payload_len>],<payload>
+        *  当客户端接收到 MQTT 服务器的数据包会上报 URC。 
+        *  [3] +QMTRECV: <client_idx>,<recv_id>
+        *  当从 MQTT 服务器接收的消息存储到缓存
+        *  时上报 URC。 [4] +QMTPING: <client_idx>,<result>
+        *  当 MQTT 链层状态变化时，客户端会关闭MQTT 连接并上报此 URC。
+        */
+        if (!strncmp(uart_event->content, "+QMTRECV:", 9)) {
+            split_count = locater_uart_split_str_bychar(uart_event->content, ",:", \
+                    s_locater_str_split_array, ARRAY_LEN(s_locater_atres_array));
+            for (split_index = 0; split_index < split_count; split_index++) {
+                printf("main, elem_%02d: %s\n", split_index, s_locater_str_split_array[split_index].data);
+            }
+
+            if (split_count == 3) {
+                printf("main, detect msg type: 3\n");
+                client_idx = atoi(s_locater_str_split_array[1].data);
+                recv_id = atoi(s_locater_str_split_array[2].data);
+            }
+            else if (split_count == 5) {
+                printf("main, detect msg type: 2, no payload len\n");
+                client_idx = atoi(s_locater_str_split_array[1].data);
+                msg_id = atoi(s_locater_str_split_array[2].data);
+                p_topic = s_locater_str_split_array[3].data;
+                payload_len = 0;
+                p_payload = s_locater_str_split_array[4].data;
+            }
+            else if (split_count == 6) {
+                printf("main, detect msg type: 2, with payload len\n");
+                client_idx = atoi(s_locater_str_split_array[1].data);
+                msg_id = atoi(s_locater_str_split_array[2].data);
+                p_topic = s_locater_str_split_array[3].data;
+                payload_len = s_locater_str_split_array[4].data;
+                p_payload = s_locater_str_split_array[5].data;
+            }
+
+            // 解析这个消息内容，APP上线/下线通知
+            sprintf(mqtt_topic_str_buf, "%s/0/5", p_serial);
+            if (!strncmp(p_topic, mqtt_topic_str_buf, strlen(mqtt_topic_str_buf))) {
+                struct locator_uart_protocol_app_on_line_fmt_s *p_app_online_fmt = \
+                    (struct locator_uart_protocol_app_on_line_fmt_s *)p_payload;
+                printf("main, app is_online: %d, app_idx: 0x%04x\n", p_app_online_fmt->app_idx, p_app_online_fmt->app_idx);
+            }
+        }
+        else if (!strncmp(uart_event->content, "+QMTSTAT:", 9)) {
+            split_count = locater_uart_split_str_bychar(uart_event->content, ",:", s_locater_str_split_array, \
+                    ARRAY_LEN(s_locater_atres_array));
+            for (split_index = 0; split_index < split_count; split_index++) {
+                printf("main, elem_%02d: %s\n", split_index, s_locater_str_split_array[split_index].data);
+            }
+            client_idx = atoi(s_locater_str_split_array[1].data);
+            err_code = atoi(s_locater_str_split_array[2].data);
+        }
+        else {
+            printf("main, no msg %04d!\n", retry_cnt);
+        }
+
         /*
         *  间隔几分钟检查一次网络
         */
-        v_task_delay(100000 / port_tick_period_ms);
-        step = 1;
-        step_bakup = 3;
-        goto start_que;
+        v_task_delay(1000 / port_tick_period_ms);
+        continue;
+      }
     }
 }
 
 int locater_uart_init(void)
 {
-    xTaskCreate(locater_uart_app_task, \
-        "uart_locater_uart_device_online_conf_task", 
-        1024*4, NULL, configMAX_PRIORITIES-1, NULL);
+    xTaskCreate(locater_uart_app_task, "uart_locater_uart_main_task", 1024 * 4, NULL, configMAX_PRIORITIES - 1, NULL);
 
     return 0;
 }

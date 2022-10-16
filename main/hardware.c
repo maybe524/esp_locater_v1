@@ -5,30 +5,8 @@
 #include "driver/uart.h"
 #include "string.h"
 #include "driver/gpio.h"
-/*
- *
- *
- *
-output:
-CAT1ģ��Ĺ���ʹ�ܽ�	GPIO7	���߹��磬���Ͷϵ�
-CAT1ģ��Ŀ�����		GPIO10	����CAT1ģ���SPC����������ʱ��
+#include "hardware.h"
 
-���ᴫ�����ն˹ܽ�		GPIO6
-2��ָʾ�ƣ�			GPIO8 GPIO9	������ô���Ĵ���
-
-input:
-���ָʾ��			GPIO2	ƽʱ���ߣ���������
-��ص�������		GPIO3	����ص�ѹ
-
-mode:
-��4Gģ��ͨѶ�ô���TX	GPIO4
-��4Gģ��ͨѶ�ô���RX	GPIO5
-
-I2C��SCL��		GPIO18
-I2C��SDA��		GPIO19
- *
- */
-//output
 #define GPIO_OUTPUT_UART_CAT1_EN    7
 #define GPIO_OUTPUT_UART_CAT1_POWER    10
 #define GPIO_OUTPUT_LED_0    8
@@ -57,20 +35,7 @@ static xQueueHandle gpio_evt_queue = NULL;
 static char s_locater_uart_recv_buff[256] = {0};
 static unsigned int s_locater_uart_recv_count = 0;
 static pthread_mutex_t s_locater_uart_data_mutex;
-
-
-#define ARRAY_LEN(array)    (sizeof(array) / sizeof(array[0]))
-#define UART_EVENT_QUE_DETH 128
-#define UART_EVENT_QUE_CONTEN_SIZE 256
-
-typedef struct uart_event_que_s {
-    bool is_valid;
-    char content[UART_EVENT_QUE_CONTEN_SIZE];
-} uart_event_que_t;
-
-typedef struct uart_event_str_s {
-    char *p_event_str;
-} uart_event_str_t;
+static unsigned int s_locater_uart_recv_status = 0;
 
 
 static struct uart_event_que_s s_uart_event_que[UART_EVENT_QUE_DETH] = {0};
@@ -80,6 +45,9 @@ static pthread_mutex_t s_uart_event_mutex;
 
 static struct uart_event_str_s s_uart_event_str_array[] = {
     {.p_event_str = "+QMTRECV:"},   ///< 服务器下发的消息
+    {.p_event_str = "+QMTSTAT:"},   ///< 服务器下发的消息
+    {.p_event_str = "+QMTPING:"},   ///< 服务器下发的消息
+
 };
 
 char *uart_get_recv_buff_head(void)
@@ -211,6 +179,15 @@ unsigned int uart_get_recv_cnt(void)
     return s_locater_uart_recv_count;
 }
 
+int uart_set_rev_buff_lock(void)
+{
+    pthread_mutex_lock(&s_locater_uart_data_mutex);
+}
+
+int uart_set_rev_buff_unlock(void)
+{
+    pthread_mutex_unlock(&s_locater_uart_data_mutex);
+}
 
 struct uart_event_que_s *uart_event_get_item(void)
 {
@@ -276,9 +253,11 @@ static void uart_rx_task(void *arg)
     int rx_bytes = 0, rx_final = 0;
     unsigned int remain = 0;
     unsigned char buff[512] = {0};
-    char *p_match_one = NULL, *p_get_one = NULL;
+    char *p_match_one = NULL, *p_get_one = NULL, *p_next_one = NULL, *p_prev_one = NULL, *p_first_one = NULL;
     struct uart_event_que_s *p_event_que = NULL;
     char event_buff[UART_EVENT_QUE_CONTEN_SIZE];
+    unsigned int curr_event_len = 0, all_event_len = 0;
+    unsigned int process_idx = 0;
 
     esp_log_level_set(RX_TASK_TAG, ESP_LOG_INFO);
     while (true) {
@@ -290,6 +269,7 @@ static void uart_rx_task(void *arg)
                 s_locater_uart_recv_count < (sizeof(s_locater_uart_recv_buff) - 1))
         {
             pthread_mutex_lock(&s_locater_uart_data_mutex);
+
             remain = (sizeof(s_locater_uart_recv_buff) - 1) - s_locater_uart_recv_count;
             rx_final = rx_bytes > remain ? remain : rx_bytes;
             memcpy(s_locater_uart_recv_buff + s_locater_uart_recv_count, buff, rx_final);
@@ -299,31 +279,88 @@ static void uart_rx_task(void *arg)
             /*
             *  在此检测4G模块的事件，例如服务器下发的事件等。
             *  如果是一个完整的句子，那么在处理，否则继续等待。
+            *  如果是一个消息，那么把消息提取出来。并且把消息移除掉。
             */
+            printf("uart_rx_task, locater_uart_recv_count: %d\n", s_locater_uart_recv_count);
+            all_event_len = 0;
+            curr_event_len = 0;
+            process_idx = 0;
+            p_first_one = NULL;
+            p_get_one = s_locater_uart_recv_buff;
+
             if (s_locater_uart_recv_count >= 2 && \
                     s_locater_uart_recv_buff[s_locater_uart_recv_count - 1] == '\n' && \
-                    s_locater_uart_recv_buff[s_locater_uart_recv_count - 2] == '\r')
+                s_locater_uart_recv_buff[s_locater_uart_recv_count - 2] == '\r')
             {
+                printf("%s, %d: %s\n", __func__, __LINE__, s_locater_uart_recv_buff);
+                // 依次遍历所有的消息关键字
                 for (i = 0; i < ARRAY_LEN(s_uart_event_str_array); i++) {
-                    p_match_one = strstr(s_locater_uart_recv_buff, s_uart_event_str_array[i].p_event_str);
+                printf("%s, %d\n", __func__, __LINE__);
+uart_rx_task_retry_get_one_event:
+                    p_match_one = strstr(p_get_one, s_uart_event_str_array[i].p_event_str);
+                    printf("%s, %d: %s\n", __func__, __LINE__, s_uart_event_str_array[i].p_event_str);
+                    printf("%s, %d, p_match_one: %p, s_locater_uart_recv_buff: %p, end: %x\n", 
+                        __func__, __LINE__,  p_match_one, s_locater_uart_recv_buff, s_locater_uart_recv_buff + s_locater_uart_recv_count);
                     if (!p_match_one)
                         continue;
-                    printf("uart_rx_task, p_match_one: %s\n", p_match_one);
-                    /*
-                    *  把事件提取出来，并且把这个事件在s_locater_uart_recv_buff中抹茶干净，
-                    *  即把s_locater_uart_recv_buff的字符串替换成XXX。
-                    */
+                    
+                    printf("%s, %d\n", __func__, __LINE__);
+                    v_task_delay(10 / portTICK_PERIOD_MS);
+                    // 记录第一个event的位置
+                    if (!p_first_one)
+                        p_first_one = p_match_one;
+                    printf("%s, %d\n", __func__, __LINE__);
+
+                    // printf("uart_rx_task, event_%04 start\n", process_idx);
+                    // printf("uart_rx_task, event_%04 content: %s\n", process_idx, p_match_one);
+                    // printf("uart_rx_task, event_%04 end\n", process_idx);
+
+                    // 把事件提取出来
                     j = 0;
                     memset(event_buff, 0, sizeof(event_buff));
                     p_get_one = p_match_one;
                     while (true) {
-                        if (*p_get_one == '\r' || *p_get_one == '\n' || j >= UART_EVENT_QUE_CONTEN_SIZE)
+                        // 考虑到后续还有一个字符\n
+                        if (*p_get_one == '\r') {
+                            p_get_one++;
+                            continue;
+                        }
+                        // 找到一个完整的消息
+                        else if (*p_get_one == '\n' || j >= UART_EVENT_QUE_CONTEN_SIZE) {
+                            p_get_one++;
                             break;
-                        event_buff[j] = *p_get_one;
-                        p_get_one++;
+                        }
+                        event_buff[j] = *p_get_one++;
                         j++;
                     }
+
+                    // 记录事件的总长度等，方便后续从接收buff中减去这些消息
+                    curr_event_len = p_get_one - p_match_one;
+                    all_event_len += curr_event_len;
+                    printf("uart_rx_task, event_%04d, curr_event_len: %d, all_event_len: %d\n", \
+                        process_idx, curr_event_len, all_event_len);
+                    
+                    // 事件入队
                     uart_event_put_item(event_buff);
+                    process_idx++;
+
+                    // 尝试在匹配一下当前类型的消息
+                    goto uart_rx_task_retry_get_one_event;
+                }
+
+                printf("%s, %d\n", __func__, __LINE__);
+                // 如果接收的buff中存在消息，那么把消息给擦除掉
+                if (p_first_one) {
+                    // 把消息从buff中擦除
+                    p_next_one = p_get_one;
+                    p_prev_one = p_first_one;
+                    while (true) {
+                        if (!(*p_next_one))
+                            break;
+                        *p_prev_one++ = *p_next_one++;
+                    }
+                    *p_prev_one = '\0';
+                    s_locater_uart_recv_count -= all_event_len;
                 }
             }
 
@@ -362,7 +399,7 @@ void uart_4g_main(void)
     ret = pthread_mutex_init(&s_uart_event_mutex, 0);
     printf("pthread_mutex_init init ret: %d\r\n", ret);
 
-    xTaskCreate(uart_rx_task, "uart_rx_task", 1024*4, NULL, configMAX_PRIORITIES, NULL);
+    xTaskCreate(uart_rx_task, "uart_rx_task", 1024*5, NULL, configMAX_PRIORITIES, NULL);
     // xTaskCreate(locater_uart_misc_task, "locater_uart_misc_task", 1024*2, NULL, configMAX_PRIORITIES-1, NULL);
 }
 
