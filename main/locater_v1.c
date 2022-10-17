@@ -294,6 +294,58 @@ static void locater_uart_send_atcmd_2_4g_module_utils_print(char *p)
     printf("\n");
 }
 
+typedef struct locater_uart_chk_recv_buff_ready_misc_param_s {
+    char *p_user_buff;
+    unsigned int user_buff_size;
+
+    char *p_strstr_array;
+    unsigned int strstr_array_size;
+
+    unsigned int *p_final_copy_size;
+    unsigned int *p_uart_buff_size;
+} locater_uart_chk_recv_buff_ready_misc_param_t;
+
+static int locater_uart_chk_recv_buff_ready_user_condiction(char *p_uart_recv_buff, \
+        unsigned int uart_rev_buff_size, void *p_argv)
+{
+    int ret = 0, i = 0;
+    char *p_strstr_found = NULL;
+    struct locater_uart_chk_recv_buff_ready_misc_param_s *p_param = \
+        (struct locater_uart_chk_recv_buff_ready_misc_param_s *)p_argv;
+    unsigned int recv_byte = 0, final_copy_byte = 0;
+    bool is_strstr_found = false;
+
+    if (!uart_rev_buff_size || !p_param)
+        return -1;
+    else if (!p_param->p_strstr_array) {
+        goto check_skip_strstr_entry;
+    }
+
+    for (i = 0; i < p_param->strstr_array_size; i++) {
+        if (!p_param->p_strstr_array[i])
+            continue;
+        p_strstr_found = strstr(p_uart_recv_buff, p_param->p_strstr_array[i]);
+        if (p_strstr_found) {
+            is_strstr_found = true;
+            break;
+        }
+    }
+    if (!is_strstr_found) {
+        return -2;
+    }
+
+check_skip_strstr_entry:
+    final_copy_byte = uart_rev_buff_size > p_param->user_buff_size ? p_param->user_buff_size : uart_rev_buff_size;
+    memcpy(p_param->p_user_buff, p_uart_recv_buff, final_copy_byte);
+    if (p_param->p_final_copy_size)
+        *p_param->p_final_copy_size = final_copy_byte;
+    if (p_param->p_uart_buff_size) {
+        *p_param->p_uart_buff_size = uart_rev_buff_size;
+    }
+
+    return 0;
+}
+
 /**
  * @brief 与4G模块的AT指令，并且获取返回的字符串
  * 
@@ -304,19 +356,17 @@ static void locater_uart_send_atcmd_2_4g_module_utils_print(char *p)
  * @param timeout 
  * @return int 
  */
-static int locater_uart_send_atcmd_2_4g_module(char *p_at_cmd_str, char *p_want_result_str,
+static int locater_uart_send_atcmd_2_4g_module(char *p_at_cmd_str, char *p_want_result_str, \
         char *p_raw_result_buff, unsigned int raw_result_buff_size, unsigned int timeout, unsigned int flags)
 {
-    int i = 0;
-    bool is_recv_fail = false;
-    unsigned int recv_byte = 0, all_recv_byte = 0, final_copy_byte = 0, bakup_recv_byte = 0;
-    char *p_uart_buff_head = uart_get_recv_buff_head();
-    unsigned int uart_buff_head_len = 0;
-    unsigned int detect_unused_char = 0;
-    char *p_found_strstr = NULL;
-    bool is_need_wait_r_n = false;
-    unsigned int try_strstr_cnt = 0;
+    int ret;
+    unsigned int all_recv_byte = 0, final_copy_byte = 0;
+    struct locater_uart_chk_recv_buff_ready_misc_param_s misc_param = {0};
     static unsigned long dump_idx = 0;
+    unsigned int chk_flags = 0;
+    char *p_strstr_array[] = {
+        p_want_result_str, "ERROR"
+    };
 
     if ((!locater_check_flags_32(&flags, LOCATER_SEND_AT_CMD_DIRECT_WAIT_RESULT) && !p_at_cmd_str) || \
             !p_raw_result_buff || !raw_result_buff_size)
@@ -342,69 +392,35 @@ static int locater_uart_send_atcmd_2_4g_module(char *p_at_cmd_str, char *p_want_
         uart_write_bytes(UART_NUM_1, p_at_cmd_str, strlen(p_at_cmd_str));
     }
 
+    chk_flags = 0;
+    misc_param.p_strstr_array = p_strstr_array;
+    misc_param.strstr_array_size = ARRAY_LEN(p_strstr_array);
+    misc_param.p_user_buff = p_raw_result_buff;
+    misc_param.user_buff_size = raw_result_buff_size;
+    misc_param.p_final_copy_size = &final_copy_byte;
+    misc_param.p_uart_buff_size = &all_recv_byte;
+
     while (true) {
         v_task_delay(10 / port_tick_period_ms);
-        recv_byte = uart_get_recv_cnt();
-        all_recv_byte = recv_byte;
+        ret = uart_chk_recv_buff_ready_condition(locater_uart_chk_recv_buff_ready_user_condiction, \
+            (void *)&misc_param, chk_flags);
+        if (!ret) {
+            printf("at_cmd_2_4g_module, wait at_response %s!\n", timeout ? "done" : "timeout");
+            break;
+        }
+        else if (!timeout) {
+            chk_flags = LOCATER_CHK_RECV_BUFF_FLAG_NO_MUST_READY;
+            continue;
+        }
         timeout--;
-        if (!timeout) {
-            printf("at_cmd_2_4g_module, wait at_response timeout!\n");
-            is_recv_fail = true;
-            break;
-        }
-        else if (!all_recv_byte)
-            continue;
-        // 如果需要等待指定的字符串，并且是曾经查找过子字符串，那么继续等待
-        else if (p_want_result_str && bakup_recv_byte == all_recv_byte && !p_found_strstr)
-            continue;
-        // 如果需要等待执行的字符串，并且字符串里边的字节数有变化，并且没有找到子字符串，那么继续等待
-        else if (p_want_result_str && bakup_recv_byte != all_recv_byte && !p_found_strstr) {
-            p_found_strstr = strstr(p_uart_buff_head, p_want_result_str);
-            printf("atcmd_2_4g_module, try(%02d) found sub str pos: %02d, back_cnt: %02d, cnt: %02d\n", \
-                try_strstr_cnt, p_found_strstr ? p_found_strstr - p_uart_buff_head : 0, \
-                bakup_recv_byte, all_recv_byte);
-            bakup_recv_byte = all_recv_byte;
-            try_strstr_cnt++;
-            continue;
-        }
-        // 如果找到子字符串，那么需要等到完整的字符串，即可退出，即字符串后边有回车换行符
-        else if (p_want_result_str && p_found_strstr && !is_need_wait_r_n) {
-            printf("atcmd_2_4g_module, found sub str done\n");
-            is_need_wait_r_n = true;
-            continue;
-        }
-        // 等待完整的字符串即可
-        else if (is_need_wait_r_n && \
-                (all_recv_byte > 2 && p_uart_buff_head[all_recv_byte - 2] == '\r' && \
-            p_uart_buff_head[all_recv_byte - 1] == '\n'))
-        {
-            printf("atcmd_2_4g_module, wait cmd respone already done\n");
-            break;
-        }
-        else if ((all_recv_byte > 4 && \
-                p_uart_buff_head[all_recv_byte - 4] == 'O'  && p_uart_buff_head[all_recv_byte - 3] == 'K'  && \
-            p_uart_buff_head[all_recv_byte - 2] == '\r' && p_uart_buff_head[all_recv_byte - 1] == '\n') || \
-                (all_recv_byte > 2 && p_uart_buff_head[all_recv_byte - 2] == '\r' && \
-            p_uart_buff_head[all_recv_byte - 1] == '\n'))
-        {
-            /*
-            *  认为一个完整的AT回复是最后有一个OK的字符串，
-            *  否则继续等待！
-            */
-            printf("atcmd_2_4g_module, wait cmd respone maybe done\n");
-            break;
-        }
     }
 
-    final_copy_byte = all_recv_byte > raw_result_buff_size ? raw_result_buff_size : all_recv_byte;
-    memcpy(p_raw_result_buff, p_uart_buff_head, final_copy_byte);
-    uart_buff_head_len = strlen(p_uart_buff_head);
     printf("/----------------------\n");
     printf("idx: %04d\n", dump_idx++);
     printf("tx %04d byte:\n", p_at_cmd_str ? strlen(p_at_cmd_str) : 0);
     locater_uart_send_atcmd_2_4g_module_utils_print(p_at_cmd_str);
     printf("rx %04d byte:\n", all_recv_byte);
-    locater_uart_send_atcmd_2_4g_module_utils_print(p_uart_buff_head);
+    locater_uart_send_atcmd_2_4g_module_utils_print(p_raw_result_buff);
     printf("----------------------/\n");
 
     return final_copy_byte;
@@ -1405,12 +1421,14 @@ static int locater_uart_get_pb_done(struct locater_atres_pbdone_fmt_s *p_pb_done
     int at_res_line = 0;
     char *p_atcmd = NULL;
     int split_count = 0;
+    char *p_want_at_response = NULL;
 
     if (!p_pb_done)
         return -1;
 
     p_atcmd = "\r\n\r\n";
-    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, NULL, buff, sizeof(buff), 1000, LOCATER_SEND_AT_CMD_WITHOUT_CLEAN);
+    // p_want_at_response = "RDY";
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, p_want_at_response, buff, sizeof(buff), 2000, LOCATER_SEND_AT_CMD_WITHOUT_CLEAN);
     if (ret < 0) {
         printf("pb_done, failed\n");
         return ret;
