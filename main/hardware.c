@@ -205,7 +205,7 @@ int uart_chk_recv_buff_ready_condition(uart_chk_recv_buff_ready_user_condiction_
     }
 
     pthread_mutex_lock(&s_locater_uart_data_mutex);
-    ret = p_user_condiction(s_locater_uart_recv_buff, s_locater_uart_recv_count, p_argv);
+    ret = p_user_condiction(s_locater_uart_recv_buff, s_locater_uart_recv_count, p_argv, flags);
     pthread_mutex_unlock(&s_locater_uart_data_mutex);
 
     return ret;
@@ -304,11 +304,12 @@ static void uart_rx_task(void *arg)
             *  如果是一个消息，那么把消息提取出来。并且把消息移除掉。
             */
             printf("uart_rx_task, locater_uart_recv_count: %d\n", s_locater_uart_recv_count);
+#if 0
             printf("uart_rx_task, recv_buff:\n");
             printf("/*********************\n");
             printf("%s\n", s_locater_uart_recv_buff);
             printf("*********************/\n");
-
+#endif
             all_event_len = 0;
             curr_event_len = 0;
             process_idx = 0;
@@ -331,9 +332,9 @@ uart_rx_task_retry_get_one_event:
                     if (!p_first_one)
                         p_first_one = p_match_one;
 
-                    printf("uart_rx_task, event_%04 start\n", process_idx);
-                    printf("uart_rx_task, event_%04 content: %s\n", process_idx, p_match_one);
-                    printf("uart_rx_task, event_%04 end\n", process_idx);
+                    printf("uart_rx_task, event_%04d start\n", process_idx);
+                    printf("uart_rx_task, event_%04d content: %s\n", process_idx, p_match_one);
+                    printf("uart_rx_task, event_%04d end\n", process_idx);
 
                     // 把事件提取出来
                     j = 0;

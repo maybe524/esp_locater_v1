@@ -5,7 +5,8 @@
 #define UART_EVENT_QUE_DETH 128
 #define UART_EVENT_QUE_CONTEN_SIZE 256
 
-typedef int (*uart_chk_recv_buff_ready_user_condiction_fuc_t)(char *p_uart_recv_buff, unsigned int uart_rev_buff_size, void *p_argv);
+typedef int (*uart_chk_recv_buff_ready_user_condiction_fuc_t)(char *p_uart_recv_buff, \
+    unsigned int uart_rev_buff_size, void *p_argv, unsigned int flags);
 
 typedef struct uart_event_que_s {
     bool is_valid;
@@ -17,8 +18,20 @@ typedef struct uart_event_str_s {
 } uart_event_str_t;
 
 typedef enum {
+    // 不需要等待有数据，直接返回结果
     LOCATER_CHK_RECV_BUFF_FLAG_NO_MUST_READY    = (1 << 0)
 } uart_chk_recv_buff_flag_e;
+
+typedef struct locater_uart_chk_recv_buff_ready_misc_param_s {
+    char *p_user_buff;
+    unsigned int user_buff_size;
+
+    char **p_strstr_array;
+    unsigned int strstr_array_size;
+
+    unsigned int *p_final_copy_size;
+    unsigned int *p_uart_buff_size;
+} locater_uart_chk_recv_buff_ready_misc_param_t;
 
 void uart_set_buff_clean(void);
 unsigned int uart_get_recv_cnt(void);
