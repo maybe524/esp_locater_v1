@@ -27,6 +27,9 @@
 
 #define RX_TASK_TAG "rx_task"
 
+#define TXD_PIN (GPIO_NUM_5)
+#define RXD_PIN (GPIO_NUM_4)
+
 
 #define port_tick_rate_ms    portTICK_RATE_MS
 #define v_task_delay  vTaskDelay
@@ -36,12 +39,14 @@ static char s_locater_uart_recv_buff[256] = {0};
 static unsigned int s_locater_uart_recv_count = 0;
 static pthread_mutex_t s_locater_uart_data_mutex;
 static bool s_is_locater_uart_recv_ready = false;
+static const int RX_BUF_SIZE = 1024;
 
 
 static struct uart_event_que_s s_uart_event_que[UART_EVENT_QUE_DETH] = {0};
 static unsigned int s_uart_event_que_busy_count = 0;
 static unsigned int s_uart_event_que_head_idx = 0, s_uart_event_que_tail_idx = 0;
 static pthread_mutex_t s_uart_event_mutex;
+static unsigned int s_locater_uart_debug_mode = 0;
 
 static struct uart_event_str_s s_uart_event_str_array[] = {
     {.p_event_str = "+QMTRECV:"},   ///< 服务器下发的消息
@@ -160,14 +165,7 @@ void gpio_init(void)
     gpio_set_intr();
     printf("gpio init finish\r\n");
 }
-
-static const int RX_BUF_SIZE = 1024;
-
-#define TXD_PIN (GPIO_NUM_5)
-#define RXD_PIN (GPIO_NUM_4)
-
-
-
+\
 int sendData(const char* logName, const char* data)
 {
     const int len = strlen(data);
@@ -269,6 +267,11 @@ int uart_event_get_busy_item_count(void)
     return s_uart_event_que_busy_count;
 }
 
+void uart_set_debug_mode(unsigned int debug_mode)
+{
+    s_locater_uart_debug_mode = debug_mode;
+}
+
 static void uart_rx_task(void *arg)
 {
     int i = 0, j = 0;
@@ -304,12 +307,14 @@ static void uart_rx_task(void *arg)
             *  如果是一个消息，那么把消息提取出来。并且把消息移除掉。
             */
             printf("uart_rx_task, locater_uart_recv_count: %d\n", s_locater_uart_recv_count);
-#if 0
-            printf("uart_rx_task, recv_buff:\n");
-            printf("/*********************\n");
-            printf("%s\n", s_locater_uart_recv_buff);
-            printf("*********************/\n");
-#endif
+
+            if (s_locater_uart_debug_mode) {
+                printf("uart_rx_task, recv_buff:\n");
+                printf("/*********************\n");
+                printf("%s\n", s_locater_uart_recv_buff);
+                printf("*********************/\n");
+            }
+
             all_event_len = 0;
             curr_event_len = 0;
             process_idx = 0;

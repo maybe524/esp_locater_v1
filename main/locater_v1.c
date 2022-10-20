@@ -348,8 +348,10 @@ check_skip_strstr_entry:
  * @param timeout 
  * @return int 
  */
-static int locater_uart_send_atcmd_2_4g_module(char *p_at_cmd_str, char *p_want_result_str, \
-        char *p_raw_result_buff, unsigned int raw_result_buff_size, unsigned int timeout, unsigned int flags)
+static int locater_uart_send_atcmd_2_4g_module(char *p_at_cmd_str, \
+        char *p_want_result_str, \
+        char *p_raw_result_buff, unsigned int raw_result_buff_size, \
+        unsigned int timeout, unsigned int flags)
 {
     int ret;
     unsigned int all_recv_byte = 0, final_copy_byte = 0;
@@ -367,6 +369,7 @@ static int locater_uart_send_atcmd_2_4g_module(char *p_at_cmd_str, char *p_want_
 
     /*
     *  清除uart buff里边的数据
+    *  即标志了LOCATER_SEND_AT_CMD_WITHOUT_CLEAN就不清除
     */
     if (!locater_check_flags_32(&flags, LOCATER_SEND_AT_CMD_WITHOUT_CLEAN)) {
         uart_set_buff_clean();
@@ -377,6 +380,7 @@ static int locater_uart_send_atcmd_2_4g_module(char *p_at_cmd_str, char *p_want_
 
     /*
     *  直接等待结果不需要发送AT指令
+    *  即标志了LOCATER_SEND_AT_CMD_DIRECT_WAIT_RESULT就不发送AT指令
     */
     if (!locater_check_flags_32(&flags, LOCATER_SEND_AT_CMD_DIRECT_WAIT_RESULT)) {
         uart_write_bytes(UART_NUM_1, p_at_cmd_str, strlen(p_at_cmd_str));
@@ -2283,6 +2287,130 @@ static unsigned int locater_uart_get_battery_level(void)
     return 0;
 }
 
+
+static int locater_uart_get_wifi_list(void)
+{
+    int ret;
+    int i = 0, j = 0;
+    char *p_atcmd = NULL;
+    int at_res_line = 0;
+    int split_count = 0;
+    char at_cmd_buf[64] = {0};
+    unsigned int err = 0;
+    unsigned int client = 0;
+    unsigned int connect_err = 0;
+    unsigned int recv_cnt = 0;
+    char *p_want_ack_str = NULL;
+
+    uart_set_debug_mode(1);
+    // 发送AT指令，等待返回OK
+    p_atcmd = "AT+QWIFISCAN\r\n";
+    p_want_ack_str = "OK";
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, p_want_ack_str, buff, sizeof(buff), 1000, 0);
+    if (ret < 0) {
+        printf("wifi_scan, failed\n");
+        return ret;
+    }
+    recv_cnt = ret;
+    at_res_line = locater_uart_process_at_response(buff, s_locater_atres_array, 32);
+
+    // 第二次直接等待扫描结果，等到关键字OK表明搜索完成
+    p_want_ack_str = "\r\n\r\nOK";
+    ret = locater_uart_send_atcmd_2_4g_module(NULL, p_want_ack_str, buff, sizeof(buff), 8000, \
+        LOCATER_SEND_AT_CMD_WITHOUT_CLEAN | LOCATER_SEND_AT_CMD_DIRECT_WAIT_RESULT);
+    if (ret < 0) {
+        printf("wifi_scan, get wifi list failed\n");
+        return ret;
+    }
+    uart_set_debug_mode(0);
+
+    ret = -2;
+    p_want_ack_str = "+QWIFISCAN:";
+    for (i = 0; i < at_res_line; i++) {
+        printf("wifi_scan, line_%02d, len_%02d: %s\n", i, strlen(s_locater_atres_array[i].atreq_content), \
+            s_locater_atres_array[i].atreq_content);
+
+        if (strncmp(p_want_ack_str, s_locater_atres_array[i].atreq_content, strlen(p_want_ack_str)))
+            continue;
+        
+        printf("wifi_scan, get wifi: %s\n", s_locater_atres_array[i].atreq_content);
+        ret = 0;
+        break;
+    }
+
+    return ret;
+}
+
+static int locater_uart_set_config(void)
+{
+    return 0;
+}
+
+static int locater_uart_get_config(void)
+{
+    return 0;
+}
+
+static int locater_uart_get_locate_info(void)
+{
+    int ret;
+    int i = 0, j = 0;
+    char *p_atcmd = NULL;
+    int at_res_line = 0;
+    int split_count = 0;
+    char at_cmd_buf[64] = {0};
+    unsigned int err = 0;
+    unsigned int client = 0;
+    unsigned int connect_err = 0;
+    unsigned int recv_cnt = 0;
+    char *p_want_ack_str = NULL;
+
+    //打开GNSS
+    p_atcmd = "AT+QGPS=1\r\n";
+    p_want_ack_str = "OK";
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, p_want_ack_str, buff, sizeof(buff), 1000, 0);
+    if (ret < 0) {
+        printf("locate_info, failed\n");
+        return ret;
+    }
+
+    // 获取定位信息
+    p_atcmd = "AT+QGPSLOC=0\r\n";
+    p_want_ack_str = "+QGPSLOC:";
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, p_want_ack_str, buff, sizeof(buff), 1000, 0);
+    if (ret < 0) {
+        printf("locate_info, failed\n");
+        return ret;
+    }
+    recv_cnt = ret;
+    at_res_line = locater_uart_process_at_response(buff, s_locater_atres_array, 32);
+
+    //关闭GNSS
+    p_atcmd = "AT+QGPS=0\r\n";
+    p_want_ack_str = "OK";
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, p_want_ack_str, buff, sizeof(buff), 1000, 0);
+    if (ret < 0) {
+        printf("locate_info, failed\n");
+        return ret;
+    }
+
+    ret = -2;
+    p_want_ack_str = "+QGPSLOC:";
+    for (i = 0; i < at_res_line; i++) {
+        printf("wifi_scan, line_%02d, len_%02d: %s\n", i, strlen(s_locater_atres_array[i].atreq_content), \
+            s_locater_atres_array[i].atreq_content);
+
+        if (strncmp(p_want_ack_str, s_locater_atres_array[i].atreq_content, strlen(p_want_ack_str)))
+            continue;
+        
+        printf("locate_info, get locate_info: %s\n", s_locater_atres_array[i].atreq_content);
+        ret = 0;
+        break;
+    }
+
+    return ret;
+}
+
 static void locater_uart_app_task(void *arg)
 {
     int ret = 0, idx = 0, i = 0;
@@ -2477,6 +2605,10 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(2) {
 
         printf("main, clear uart recv buff data\n");
         uart_set_buff_clean();
+
+
+        locater_uart_get_wifi_list();
+        locater_uart_get_locate_info();
         retry_cnt = 0;
         s_is_locater_online = true;
         step++;

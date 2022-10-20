@@ -34,6 +34,7 @@ typedef struct locater_uart_chk_recv_buff_ready_misc_param_s {
 } locater_uart_chk_recv_buff_ready_misc_param_t;
 
 void uart_set_buff_clean(void);
+void uart_set_debug_mode(unsigned int debug_mode);
 unsigned int uart_get_recv_cnt(void);
 char *uart_get_recv_buff_head(void);
 int uart_chk_recv_buff_ready_condition(uart_chk_recv_buff_ready_user_condiction_fuc_t p_user_condiction, void *p_argv, unsigned int flags);
