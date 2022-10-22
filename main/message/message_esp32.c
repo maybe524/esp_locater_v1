@@ -1,4 +1,5 @@
 #include "../common_esp32.h"
+#include "../common/common.h"
 
 static void *example_thread(void * arg);
 
@@ -25,21 +26,6 @@ broker.emqx.io
 
 #include "driver/temp_sensor.h"
 
-void temp_init()
-{
-	// Initialize touch pad peripheral, it will start a timer to run a filter
-	//ESP_LOGI(TAG, "Initializing Temperature sensor");
-	printf("Initializing Temperature sensor\r\n");
-	temp_sensor_config_t temp_sensor = TSENS_CONFIG_DEFAULT();
-	temp_sensor_get_config(&temp_sensor);
-	//ESP_LOGI(TAG, "default dac %d, clk_div %d", temp_sensor.dac_offset, temp_sensor.clk_div);
-	printf("default dac %d, clk_div %d\r\n", temp_sensor.dac_offset, temp_sensor.clk_div);
-	temp_sensor.dac_offset = TSENS_DAC_DEFAULT;
-	temp_sensor_set_config(temp_sensor);
-	temp_sensor_start();
-	//ESP_LOGI(TAG, "Temperature sensor started");
-	printf("Temperature sensor started\r\n");
-}
 
 float temp_read()
 {
@@ -152,7 +138,17 @@ int message_recv()
 void message_handle()
 {
 	int restart_time = 0;
-	temp_init();
+
+	//read and write storage
+	int key_val = 123;
+
+	//wifi
+	nvs_init();
+	//wifi_init();
+
+//	wifi_connect();
+//	wifi_scan();
+//	sys_ota();
 
 	while(1)
 	{
@@ -167,6 +163,15 @@ void message_handle()
 			//storage_read();
 			//restart_time++;
 			//storage_write(restart_time);
+
+			//read and write storage
+			//key_val++;
+			//printf("read key =%d\r\n", storage_read("key"));
+			//storage_write("key", key_val);
+
+			//wifi_scan();
+			//dpp_enrollee_init();
+
 			break;
 		case 2:
 			//message_alarm_report(); //6 message
@@ -255,9 +260,6 @@ void message_send_alarm_temp()
 {
 
 }
-
-
-
 
 //receive
 void message_receive_init()

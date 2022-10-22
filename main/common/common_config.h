@@ -1,3 +1,8 @@
+#ifndef __COMMON_CONFIG_H_
+#define __COMMON_CONFIG_H_
+
+#include "common.h"
+
 typedef struct location_config_servier {
 	char strServerHost[2][32];
 	unsigned int U32ServerPort[2];
@@ -50,3 +55,5 @@ typedef struct location_config {
 	STRU_location_config_hardware stlocation_config_hardware;
 	STRU_location_config_appconfig stlocation_config_appconfig;
 }STRU_location_config;
+
+#endif

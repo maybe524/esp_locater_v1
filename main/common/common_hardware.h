@@ -8,9 +8,9 @@
 */
 #ifndef __COMMON_HARDWARE_H_
 #define __COMMON_HARDWARE_H_
-#include "common_hardware.h"
-#include "common_power.h"
+#include "common.h"
 
+/*
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -18,13 +18,15 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "driver/gpio.h"
-
+*/
 /*external function*/
 inline void common_init(){ printf("common_init\r\n"); }
 void hareware_main(void);
 int hardware_battery_get_cap();//return 99,%
 int hardware_charger_get();//0 - no charger 1-charger
-int hardware_temp_get(); // return 99.c
+int hardware_leds_ctl(int ledidx, int onoff);//onoff 0-off 1-on
+float hardware_temp_get(); // return 99.c
 int hardware_touch_get();//pengzhuang
 int hardware_weilan_get();//weilan
+int hardware_voice_record();
 #endif
