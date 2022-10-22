@@ -14,7 +14,6 @@
 #define port_tick_rate_ms   portTICK_RATE_MS
 #define port_tick_period_ms  portTICK_PERIOD_MS
 #define v_task_delay  vTaskDelay
-#define config_max_priorities configMAX_PRIORITIES
 
 /*
 *  //TBD: 经常发生栈溢出，临时把变量放在外边
@@ -30,7 +29,7 @@ static struct locater_atres_cgatt_fmt_s s_locater_atres_cgatt = {0};
 static struct locater_atres_cereg_fmt_s s_locater_atres_cereg = {0};
 static struct locater_atres_cpsi_fmt_s s_locater_atres_cpsi = {0};
 static char s_locater_device_serial_buff[LOCATER_DEVICE_SERIAL_SIZE + 1] = {0};
-static bool s_is_locater_device_ready = false;
+static bool s_is_locater_online = false;
 static unsigned int s_locater_temperature_threshold_high = 0, s_locater_temperature_threshold_low = 0;
 static unsigned int s_locater_uart_curr_app_idx = 0;
 static bool s_is_locater_uart_curr_app_online = false;
@@ -40,8 +39,6 @@ static bool s_is_locater_uart_need_compare_distances = false;
 static bool s_is_locater_uart_once_positioning = false;
 static bool s_is_locater_uart_need_wifi_scan = false;
 static pthread_mutex_t s_locater_uart_4g_module_mutex;
-static char *p_serial = "ABCABCABC";
-
 
 static unsigned int locater_uart_get_temperature(void);
 static unsigned int locater_uart_get_collision(void);
@@ -2521,63 +2518,7 @@ static int locater_uart_get_ati(void)
     return ret;
 }
 
-/**
- * @brief 获取一次定位的应用
- * 
- * @param arg  [in ] 
- * 
- * @details 
- */
-static void locater_uart_app_once_positioning_task(void *arg)
-{
-    unsigned int step = 0, step_bakup = 0;
-    char mqtt_topic_str_buf[256] = {0}, mqtt_payload_str_buf[256] = {0};
-    int client_handle = 0;
-    unsigned int qos = 0, remain = 0;
-
-    while (true) {
-LOCATOR_UART_FSM_COM_STEP_ENTRY(0) {
-        // 循环等待标志位
-        if (!s_is_locater_uart_once_positioning) {
-            v_task_delay(1000 / port_tick_rate_ms);
-            continue;
-        }
-
-        // 标志位置位false
-        s_is_locater_uart_once_positioning = false;
-        step++;
-      }
-
-LOCATOR_UART_FSM_COM_STEP_ENTRY(1) {
-        /*
-        *  如果主程序告知设备没有准备好，那么放弃执行任务。
-        */
-        if (!s_is_locater_device_ready) {
-            printf("app_once_positioning, detect device is not ready\n");
-            continue;
-        }
-
-        /*
-        *  单次定位在没有GPS、WIFI定位信息的情况下，提供LBS定位信息
-        */
-        sprintf(mqtt_topic_str_buf, "%s/07", p_serial);
-        locater_uart_set_mqtt_pub(client_handle, mqtt_topic_str_buf, mqtt_payload_str_buf, qos, remain, 0);
-        printf("app_once_positioning, upload once positioning done\n");
-        step = 0;
-      }
-    }
-
-    return;
-}
-
-/**
- * @brief 主程序
- * 
- * @param arg  [in ] 
- * 
- * @details 
- */
-static void locater_uart_app_main_task(void *arg)
+static void locater_uart_main_task(void *arg)
 {
     int ret = 0, idx = 0, i = 0;
     char *p_atcmd = NULL;
@@ -2594,6 +2535,7 @@ static void locater_uart_app_main_task(void *arg)
     bool is_need_upload_service = false;
     char mqtt_topic_str_buf[256] = {0}, mqtt_payload_str_buf[256] = {0};
     unsigned int mqtt_payload_qos = 0, mqtt_payload_retain = 0, mqtt_flags = 0;
+    char *p_serial = "ABCABCABC";
     struct locater_atres_fmt_s atres_array[32] = {0};
     struct locater_str_split_fmt_s split_array[32] = {0};
 
@@ -2604,9 +2546,9 @@ static void locater_uart_app_main_task(void *arg)
 LOCATOR_UART_FSM_COM_STEP_ENTRY(0) {
         printf("\n\n");
         printf("//////////////////%04d//////////////////\n", idx++);
-        s_is_locater_device_ready = false;
+        s_is_locater_online = false;
 
-        printf("app_main, close 4g module\n");
+        printf("main, close 4g module\n");
         // 不给4G模块供电
         v_task_delay(5000 / port_tick_period_ms);
         gpio_set_level(GPIO_OUTPUT_UART_CAT1_EN, 0);
@@ -2618,7 +2560,7 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(0) {
         v_task_delay(1000 / port_tick_rate_ms);
 
         // 4G模块上电
-        printf("app_main, open 4g module\n");
+        printf("main, open 4g module\n");
         gpio_set_level(GPIO_OUTPUT_UART_CAT1_POWER, 1);
         v_task_delay(1000 / port_tick_rate_ms);
         gpio_set_level(GPIO_OUTPUT_UART_CAT1_POWER, 0);
@@ -2628,7 +2570,7 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(0) {
         p_at_cmd_str = "\r\n\r\n";
         uart_write_bytes(UART_NUM_1, p_at_cmd_str, strlen(p_at_cmd_str));
 
-        printf("app_main, wait 4g module power on\n");
+        printf("main, wait 4g module power on\n");
         ret = locater_uart_get_pb_done(&s_locater_atres_pbdone);
         printf("pb_done, detect pb_done ready: %d (%d)\n", s_locater_atres_pbdone.is_power_on_done, ret);
         if (ret < 0 || !s_locater_atres_pbdone.is_power_on_done) {
@@ -2647,7 +2589,7 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(1) {
 
         // 检查SIM在位情况
         printf("\r\n\r\n");
-        printf("app_main, check sim card is ready\n");
+        printf("main, check sim card is ready\n");
         ret = locater_uart_get_cpin(&s_locater_atres_cpin);
         printf("cpin, detect sim ready: %d (%d)\n", s_locater_atres_cpin.is_ready, ret);
         if (!s_locater_atres_cpin.is_ready) {
@@ -2739,12 +2681,12 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(2) {
         printf("device_serial, str result: %s\n", s_locater_device_serial_buff);
 
         printf("\r\n\r\n");
-        printf("app_main, open mqtt\n");
+        printf("main, open mqtt\n");
         ret = locater_uart_set_mqtt_open(0);
 
         //  MQTT连接
         printf("\r\n\r\n");
-        printf("app_main, connect mqtt server\n");
+        printf("main, connect mqtt server\n");
         ret = locater_uart_set_mqtt_connect();
         printf("mqtt_connect, detect mqtt connect result: %d\n", ret);
         if (ret) {
@@ -2754,7 +2696,7 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(2) {
 
         // 上线订阅主题：订阅主题为SERIAL/#，QoS=1，Retain=0。
         printf("\r\n\r\n");
-        printf("app_main, sub mqtt topic\n");
+        printf("main, sub mqtt topic\n");
         sprintf(mqtt_topic_str_buf, "%s/#", p_serial);
         ret = locater_uart_set_mqtt_sub(client_handle, mqtt_topic_str_buf, 1, 0, 0);
 
@@ -2769,18 +2711,18 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(2) {
 
         // 上线通知服务器
         printf("\r\n\r\n");
-        printf("app_main, pub mqtt device online\n");
+        printf("main, pub mqtt device online\n");
         sprintf(mqtt_topic_str_buf, "%sD/0/0", p_serial);
         ret = locater_uart_set_mqtt_pub(client_handle, mqtt_topic_str_buf, "1", 1, 1, 0);
 
-        printf("app_main, clear uart recv buff data\n");
+        printf("main, clear uart recv buff data\n");
         uart_set_buff_clean();
 
 
         // locater_uart_get_wifi_list();
         locater_uart_get_locate_info();
         retry_cnt = 0;
-        s_is_locater_device_ready = true;
+        s_is_locater_online = true;
         step++;
       }
 
@@ -2951,8 +2893,7 @@ int locater_uart_init(void)
 
     ret = pthread_mutex_init(&s_locater_uart_4g_module_mutex, 0);
 
-    xTaskCreate(locater_uart_app_main_task, "app_main_task", 1024 * 30, NULL, config_max_priorities - 1, NULL);
-    xTaskCreate(locater_uart_app_once_positioning_task, "app_once_positioning_task", 1024 * 30, NULL, config_max_priorities - 1, NULL);
+    xTaskCreate(locater_uart_main_task, "locater_uart_main_task", 1024 * 30, NULL, configMAX_PRIORITIES - 1, NULL);
 
     return 0;
 }
