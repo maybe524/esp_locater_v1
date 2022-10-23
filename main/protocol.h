@@ -8,3 +8,34 @@ typedef struct locator_uart_protocol_app_on_line_fmt_s {
     char is_on_line;
     unsigned int app_idx;
 } locator_uart_protocol_app_on_line_fmt_t;
+
+
+/**
+ * @brief 10.3 接收 WIFI 热点设置消息：消息主题为 SERIAL/0/8N，消息 payload =4 字节保留数据+1 字节热点数量+【1
+ *  字节热点编号+17 字节 MAC】*热点数量+（保留字节，长度待定），热点编号依次为 1、2、3、。。。。。 ，QOS=1； 接
+ *  收该消息后，删除以前的 wifi 设置数据
+ * @details 
+ */
+typedef struct locator_uart_protocol_app_set_wifi_mac_array_payload_fmt_s {
+    char reserv[4];
+    char wifi_count;
+    struct {
+        char idx;
+        char mac[17];
+    } idx_mac_array[64];
+
+} locator_uart_protocol_app_set_wifi_mac_array_payload_fmt_s;
+
+typedef struct locator_uart_protocol_dev_set_wifi_rssi_array_payload_fmt_s {
+    char wifi_count;
+    struct {
+        char idx;
+        char rssi;
+    } idx_rssi_array[64];
+
+} locator_uart_protocol_dev_set_wifi_rssi_array_payload_fmt_t;
+
+typedef struct locator_uart_protocol_dev_set_wifi_rssi_payload_fmt_s {
+    unsigned int id;
+    char rssi;
+} locator_uart_protocol_dev_set_wifi_rssi_payload_fmt_t;

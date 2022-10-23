@@ -38,7 +38,9 @@ static bool s_is_locater_uart_device_need_suspend = false;
 static bool s_is_locater_uart_continuous_positioning = false;
 static bool s_is_locater_uart_need_compare_distances = false;
 static bool s_is_locater_uart_once_positioning = false;
-static bool s_is_locater_uart_need_wifi_scan = false;
+static bool s_is_locater_uart_need_wifi_scan_rssi_by_mac_array = false;
+static bool s_is_locater_uart_need_wifi_scan_rssi_by_mac = false;
+static unsigned int s_is_locater_uart_need_wifi_scan_rssi_by_mac_app_idx = 0;
 static pthread_mutex_t s_locater_uart_4g_module_mutex;
 static char *p_serial = "ABCABCABC";
 
@@ -2419,7 +2421,14 @@ static int locater_uart_get_config(void)
     return 0;
 }
 
-static int locater_uart_get_locate_info(void)
+/**
+ * @brief 通过4G模块获取GPS定位信息
+ * 
+ * @return int 
+ * 
+ * @details 
+ */
+static int locater_uart_get_location_info(void)
 {
     int ret;
     int i = 0, j = 0;
@@ -2441,6 +2450,23 @@ static int locater_uart_get_locate_info(void)
     ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, p_want_ack_str, buff, sizeof(buff), 1000, 0);
     if (ret < 0) {
         printf("locate_info, get gnss version failed\n");
+        return ret;
+    }
+
+    /*
+    *  选择混合定位
+    *  0 单GPS
+    *  3 GPS + GLONASS + Galileo 混合定位（仅 EC200U-EU 和 EC600U-EU 模块支持）
+    *  5 GPS + BeiDou混合定位（当模块为非EC200U-EU或EC600U-EU时）
+    *  GPS + BeiDou + Galileo混合定位（当模块为EC200U-EU或EC600U-EU时）
+    *  7 单BeiDou
+    *  <errcode> 操作错误码。详细
+    */
+    p_atcmd = "AT+QGPSCFG=\"gnssconfig\",5\r\n";
+    p_want_ack_str = "OK";
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, p_want_ack_str, buff, sizeof(buff), 1000, 0);
+    if (ret < 0) {
+        printf("locate_info, set gps_beidou_mix location failed\n");
         return ret;
     }
 
@@ -2544,6 +2570,7 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(0) {
         }
 
         // 标志位置位false
+        printf("app_once_positioning, detect device once positioning\n");
         s_is_locater_uart_once_positioning = false;
         step++;
       }
@@ -2558,11 +2585,165 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(1) {
         }
 
         /*
-        *  单次定位在没有GPS、WIFI定位信息的情况下，提供LBS定位信息
+        *  单次定位在没有GPS、WIFI定位信息的情况下，提供LBS定位信息。
+        *  按照协议发布到指定的主题。
         */
         sprintf(mqtt_topic_str_buf, "%s/07", p_serial);
         locater_uart_set_mqtt_pub(client_handle, mqtt_topic_str_buf, mqtt_payload_str_buf, qos, remain, 0);
         printf("app_once_positioning, upload once positioning done\n");
+        step = 0;
+      }
+    }
+
+    return;
+}
+
+typedef struct locator_uart_wifi_mac_info_s {
+    char is_valid;
+    char idx;
+    char mac[17];
+    char ssid[256];
+    int rssi;
+} locator_uart_wifi_mac_info_t;
+
+static struct locator_uart_wifi_mac_info_s s_locator_uart_wifi_info_array[64] = {0};
+static unsigned int s_locator_uart_wifi_info_size = 0;
+static unsigned char s_locator_uart_wifi_scan_mac[32] = {0};
+
+static int locater_uart_wifi_set_mac_array(char *p_mqtt_payload)
+{
+    int i = 0;
+    struct locator_uart_protocol_app_set_wifi_mac_array_payload_fmt_s *p_mac_array = \
+            (struct locator_uart_protocol_app_set_wifi_mac_array_payload_fmt_s *)p_mqtt_payload;
+
+    memset(s_locator_uart_wifi_info_array, 0, sizeof(s_locator_uart_wifi_info_array));
+    printf("wifi_set_mac_array, update wifi mac array, wifi_count: %d\n", p_mac_array->wifi_count);
+    for (i = 0; i < p_mac_array->wifi_count; i++) {
+        s_locator_uart_wifi_info_array[i].is_valid = 1;
+        s_locator_uart_wifi_info_array[i].idx = p_mac_array->idx_mac_array[i].idx;
+        memcpy(&s_locator_uart_wifi_info_array[i].mac, p_mac_array->idx_mac_array[i].mac, 17);
+        printf("wifi_set_mac_array, update wifi mac_%02d: 0x%02x-0x%02x-0x%02x-0x%02x-"
+            "0x%02x-0x%02x-0x%02x-0x%02x-0x%02x-0x%02x-0x%02x-"
+            "0x%02x-0x%02x-0x%02x-0x%02x-0x%02x-0x%02x\n", s_locator_uart_wifi_info_array[i].idx, \
+            p_mac_array->idx_mac_array[i].mac[ 0], 
+            p_mac_array->idx_mac_array[i].mac[ 1], 
+            p_mac_array->idx_mac_array[i].mac[ 2],
+            p_mac_array->idx_mac_array[i].mac[ 3],
+            p_mac_array->idx_mac_array[i].mac[ 4], 
+            p_mac_array->idx_mac_array[i].mac[ 5], 
+            p_mac_array->idx_mac_array[i].mac[ 6], 
+            p_mac_array->idx_mac_array[i].mac[ 7],
+            p_mac_array->idx_mac_array[i].mac[ 8], 
+            p_mac_array->idx_mac_array[i].mac[ 9], 
+            p_mac_array->idx_mac_array[i].mac[10], 
+            p_mac_array->idx_mac_array[i].mac[11],
+            p_mac_array->idx_mac_array[i].mac[12], 
+            p_mac_array->idx_mac_array[i].mac[13], 
+            p_mac_array->idx_mac_array[i].mac[14], 
+            p_mac_array->idx_mac_array[i].mac[15],
+            p_mac_array->idx_mac_array[i].mac[16]);
+    }
+
+    s_locator_uart_wifi_info_size = p_mac_array->wifi_count;
+    return 0;
+}
+
+/**
+ * @brief WIFI的所有任务
+ * 
+ * @param arg  [in ] 
+ * 
+ * @details 
+ */
+static void locater_uart_app_wifi_misc_task(void *arg)
+{
+    unsigned int step = 0, step_bakup = 0;
+	STRU_WIFI_INFO *p_wifi_info  = NULL;
+    unsigned int wifi_cnt = 0, wifi_idx = 0;
+    char mqtt_topic_str_buf[256] = {0}, mqtt_payload_str_buf[256] = {0};
+    unsigned int qos = 0, remain = 0;
+    unsigned int i = 0, client_handle = 0;
+
+    while (true) {
+LOCATOR_UART_FSM_COM_STEP_ENTRY(0) {
+        if (!s_is_locater_uart_need_wifi_scan_rssi_by_mac_array)
+            step = 1;
+        else if (s_is_locater_uart_need_wifi_scan_rssi_by_mac)
+            step = 2;
+        else {
+            v_task_delay(1000 / port_tick_rate_ms);
+            continue;
+        }
+      }
+
+    // 按照协议上报wifi的rssi值
+LOCATOR_UART_FSM_COM_STEP_ENTRY(1) {
+        struct locator_uart_protocol_dev_set_wifi_rssi_array_payload_fmt_s *p_wifi_rssi_payload_array = NULL;
+        printf("uart_app_wifi_scan, detect device wifi scan by mac array\n");
+        wifi_init();
+        wifi_scan();
+        wifi_cnt = wifi_get_info(&p_wifi_info);
+        printf("uart_app_wifi_scan, detect wifi_cnt: %d\n", wifi_cnt);
+        for (wifi_idx = 0; wifi_idx < wifi_cnt; wifi_idx++) {
+            printf("uart_app_wifi_scan, wifi_idx: %02d, ssid: %s, rssi: %d, mac: %02x,%02x,%02x,%02x,%02x,%02x,%02x,%02x\r\n", \
+                wifi_idx, p_wifi_info[wifi_idx].ssid, p_wifi_info[wifi_idx].rssi, \
+                p_wifi_info[wifi_idx].mac[0], p_wifi_info[wifi_idx].mac[1], p_wifi_info[wifi_idx].mac[2],
+                p_wifi_info[wifi_idx].mac[3], p_wifi_info[wifi_idx].mac[4], p_wifi_info[wifi_idx].mac[5],
+                p_wifi_info[wifi_idx].mac[6]);
+            // 匹配相同的mac地址，获取rssi信号强度
+            for (i = 0; i < s_locator_uart_wifi_info_size; i++) {
+                if (!memcmp(p_wifi_info[wifi_idx].mac, s_locator_uart_wifi_info_array[i].mac, 17)) {
+                    s_locator_uart_wifi_info_array[i].rssi = p_wifi_info[wifi_idx].rssi;
+                    break;
+                }
+            }
+        }
+
+        // 按照协议上报wifi的rssi值
+        sprintf(mqtt_topic_str_buf, "%sD/7N", p_serial);
+        memset(mqtt_payload_str_buf, 0, sizeof(mqtt_payload_str_buf));
+        p_wifi_rssi_payload_array = (struct locator_uart_protocol_dev_set_wifi_rssi_array_payload_fmt_s *)mqtt_payload_str_buf;
+        p_wifi_rssi_payload_array->wifi_count = wifi_cnt;
+        for (wifi_idx = 0; wifi_idx < wifi_cnt; wifi_idx++) {
+            p_wifi_rssi_payload_array->idx_rssi_array[wifi_idx].idx = s_locator_uart_wifi_info_array[i].idx;
+            p_wifi_rssi_payload_array->idx_rssi_array[wifi_idx].rssi = s_locator_uart_wifi_info_array[i].rssi;
+        }
+        locater_uart_set_mqtt_pub(client_handle, mqtt_topic_str_buf, mqtt_payload_str_buf, qos, remain, 0);
+        s_is_locater_uart_need_wifi_scan_rssi_by_mac_array = false;
+        step = 0;
+      }
+
+    // 按照协议上报指定wifi的rssi值
+LOCATOR_UART_FSM_COM_STEP_ENTRY(2) {
+        char mac_rssi = 0;
+        struct locator_uart_protocol_dev_set_wifi_rssi_payload_fmt_s *p_wifi_rssi_payload = NULL;
+        printf("uart_app_wifi_scan, detect device wifi scan by mac\n");
+        wifi_init();
+        wifi_scan();
+        wifi_cnt = wifi_get_info(&p_wifi_info);
+        printf("uart_app_wifi_scan, detect wifi_cnt: %d\n", wifi_cnt);
+        for (wifi_idx = 0; wifi_idx < wifi_cnt; wifi_idx++) {
+            printf("uart_app_wifi_scan, wifi_idx: %02d, ssid: %s, rssi: %d, mac: %02x,%02x,%02x,%02x,%02x,%02x,%02x,%02x\r\n", \
+                wifi_idx, p_wifi_info[wifi_idx].ssid, p_wifi_info[wifi_idx].rssi, \
+                p_wifi_info[wifi_idx].mac[0], p_wifi_info[wifi_idx].mac[1], p_wifi_info[wifi_idx].mac[2],
+                p_wifi_info[wifi_idx].mac[3], p_wifi_info[wifi_idx].mac[4], p_wifi_info[wifi_idx].mac[5],
+                p_wifi_info[wifi_idx].mac[6]);
+            // 匹配相同的mac地址，获取rssi信号强度
+            if (!memcmp(p_wifi_info[wifi_idx].mac, s_locator_uart_wifi_scan_mac, 17)) {
+                mac_rssi = p_wifi_info[wifi_idx].rssi;
+                break;
+            }
+        }
+
+        // 按照协议上报指定wifi的rssi值
+        sprintf(mqtt_topic_str_buf, "%sD/signal4N", p_serial);
+        memset(mqtt_payload_str_buf, 0, sizeof(mqtt_payload_str_buf));
+        p_wifi_rssi_payload = (struct locator_uart_protocol_dev_set_wifi_rssi_payload_fmt_s *)mqtt_payload_str_buf;
+        p_wifi_rssi_payload->id = s_is_locater_uart_need_wifi_scan_rssi_by_mac_app_idx;
+        p_wifi_rssi_payload->rssi = mac_rssi;
+        locater_uart_set_mqtt_pub(client_handle, mqtt_topic_str_buf, mqtt_payload_str_buf, qos, remain, 0);
+        s_is_locater_uart_need_wifi_scan_rssi_by_mac_app_idx = 0;
+        s_is_locater_uart_need_wifi_scan_rssi_by_mac = false;
         step = 0;
       }
     }
@@ -2776,9 +2957,8 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(2) {
         printf("app_main, clear uart recv buff data\n");
         uart_set_buff_clean();
 
-
-        // locater_uart_get_wifi_list();
-        locater_uart_get_locate_info();
+        locater_uart_get_location_info();
+        v_task_delay(5000 / port_tick_period_ms);
         retry_cnt = 0;
         s_is_locater_device_ready = true;
         step++;
@@ -2915,13 +3095,30 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(3) {
                 continue;
             }
 
-            // WIFI扫描
-            sprintf(mqtt_topic_str_buf, "\"%s/X0N\"", p_serial);
+            // 10.1，WIFI扫描
+            sprintf(mqtt_topic_str_buf, "\"%s/0N\"", p_serial);
             if (!strncmp(p_topic, mqtt_topic_str_buf, strlen(mqtt_topic_str_buf))) {
                 printf("main_event_centre, device need wifi scanning\n");
-                s_is_locater_uart_need_wifi_scan = true;
+                s_is_locater_uart_need_wifi_scan_rssi_by_mac_array = true;
                 continue;
             }
+
+            // 10.3，收到手机端下发的wifi的mac列表
+            sprintf(mqtt_topic_str_buf, "\"%s/0/8N\"", p_serial);
+            if (!strncmp(p_topic, mqtt_topic_str_buf, strlen(mqtt_topic_str_buf))) {
+                printf("main_event_centre, device recv wifi mac list\n");
+                locater_uart_wifi_set_mac_array(p_payload);
+                continue;
+            }
+
+            sprintf(mqtt_topic_str_buf, "%s", "3N");
+            if (strstr(p_topic, mqtt_topic_str_buf)) {
+                printf("main_event_centre, device recv wifi mac\n");
+                s_is_locater_uart_need_wifi_scan_rssi_by_mac = true;
+                s_is_locater_uart_need_wifi_scan_rssi_by_mac_app_idx = *(unsigned int *)p_payload;
+                continue;
+            }
+
         }
         else if (!strncmp(uart_event->content, "+QMTSTAT:", 9)) {
             split_count = locater_uart_split_str_bychar(uart_event->content, ",:", split_array, \
@@ -2953,6 +3150,7 @@ int locater_uart_init(void)
 
     xTaskCreate(locater_uart_app_main_task, "app_main_task", 1024 * 30, NULL, config_max_priorities - 1, NULL);
     xTaskCreate(locater_uart_app_once_positioning_task, "app_once_positioning_task", 1024 * 30, NULL, config_max_priorities - 1, NULL);
+    xTaskCreate(locater_uart_app_wifi_misc_task, "locater_uart_app_wifi_misc_task", 1024 * 30, NULL, config_max_priorities - 1, NULL);
 
     return 0;
 }
