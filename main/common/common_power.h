@@ -5,6 +5,7 @@ extern void common_power_enter_light_sleep_ext();
 #include "common.h"
 
 void power_init();
+void power_enable(int onoff);
 #if 0
 void common_power_enter_light_sleep()
 {

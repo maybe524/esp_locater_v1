@@ -7,6 +7,89 @@
 #include "driver/gpio.h"
 #include "hardware.h"
 
+//temp sensor
+#include "driver/temp_sensor.h"
+
+//gpio
+#include <stdlib.h>
+#include "freertos/task.h"
+#include "freertos/queue.h"
+
+//i2c
+#include "driver/i2c.h"
+
+//adc
+#include <stdio.h>
+#include "sdkconfig.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
+#include "driver/adc.h"
+
+#define CONFIG_IDF_TARGET_ESP32C3 1
+
+#define TIMES              256
+#define GET_UNIT(x)        ((x>>3) & 0x1)
+
+#if CONFIG_IDF_TARGET_ESP32
+#define ADC_RESULT_BYTE     2
+#define ADC_CONV_LIMIT_EN   1                       //For ESP32, this should always be set to 1
+#define ADC_CONV_MODE       ADC_CONV_SINGLE_UNIT_1  //ESP32 only supports ADC1 DMA mode
+#define ADC_OUTPUT_TYPE     ADC_DIGI_OUTPUT_FORMAT_TYPE1
+#elif CONFIG_IDF_TARGET_ESP32S2
+#define ADC_RESULT_BYTE     2
+#define ADC_CONV_LIMIT_EN   0
+#define ADC_CONV_MODE       ADC_CONV_BOTH_UNIT
+#define ADC_OUTPUT_TYPE     ADC_DIGI_OUTPUT_FORMAT_TYPE2
+#elif CONFIG_IDF_TARGET_ESP32C3 || CONFIG_IDF_TARGET_ESP32H2
+#define ADC_RESULT_BYTE     4
+#define ADC_CONV_LIMIT_EN   0
+#define ADC_CONV_MODE       ADC_CONV_ALTER_UNIT     //ESP32C3 only supports alter mode
+#define ADC_OUTPUT_TYPE     ADC_DIGI_OUTPUT_FORMAT_TYPE2
+#elif CONFIG_IDF_TARGET_ESP32S3
+#define ADC_RESULT_BYTE     4
+#define ADC_CONV_LIMIT_EN   0
+#define ADC_CONV_MODE       ADC_CONV_BOTH_UNIT
+#define ADC_OUTPUT_TYPE     ADC_DIGI_OUTPUT_FORMAT_TYPE2
+#endif
+
+#if CONFIG_IDF_TARGET_ESP32C3 || CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32H2
+static uint16_t adc1_chan_mask = BIT(3);
+static adc_channel_t channel[1] = {ADC1_CHANNEL_3};
+#endif
+#if CONFIG_IDF_TARGET_ESP32S2
+static uint16_t adc1_chan_mask = BIT(2) | BIT(3);
+static uint16_t adc2_chan_mask = BIT(0);
+static adc_channel_t channel[3] = {ADC1_CHANNEL_2, ADC1_CHANNEL_3, (ADC2_CHANNEL_0 | 1 << 3)};
+#endif
+#if CONFIG_IDF_TARGET_ESP32
+static uint16_t adc1_chan_mask = BIT(7);
+static uint16_t adc2_chan_mask = 0;
+static adc_channel_t channel[1] = {ADC1_CHANNEL_7};
+#endif
+
+//static const char *TAG = "ADC DMA";
+
+/*
+ *  i2c
+*/
+static const char *TAG = "i2c-simple-example";
+
+#define I2C_MASTER_SCL_IO           18
+#define I2C_MASTER_SDA_IO           19
+//#define I2C_MASTER_SCL_IO           CONFIG_I2C_MASTER_SCL      /*!< GPIO number used for I2C master clock */
+//#define I2C_MASTER_SDA_IO           CONFIG_I2C_MASTER_SDA      /*!< GPIO number used for I2C master data  */
+#define I2C_MASTER_NUM              0                          /*!< I2C master i2c port number, the number of i2c peripheral interfaces available will depend on the chip */
+#define I2C_MASTER_FREQ_HZ          400000                     /*!< I2C master clock frequency */
+#define I2C_MASTER_TX_BUF_DISABLE   0                          /*!< I2C master doesn't need buffer */
+#define I2C_MASTER_RX_BUF_DISABLE   0                          /*!< I2C master doesn't need buffer */
+#define I2C_MASTER_TIMEOUT_MS       1000
+
+#define MPU9250_SENSOR_ADDR                 0x68        /*!< Slave address of the MPU9250 sensor */
+#define MPU9250_WHO_AM_I_REG_ADDR           0x75        /*!< Register addresses of the "who am I" register */
+
+#define MPU9250_PWR_MGMT_1_REG_ADDR         0x6B        /*!< Register addresses of the power managment register */
+#define MPU9250_RESET_BIT                   7
 #define GPIO_OUTPUT_UART_CAT1_EN    7
 #define GPIO_OUTPUT_UART_CAT1_POWER    10
 #define GPIO_OUTPUT_LED_0    8
@@ -125,13 +208,14 @@ void gpio_set_input()
 
 void gpio_set_intr()
 {
+
     //change gpio intrrupt type for one pin
     gpio_set_intr_type(GPIO_INPUT_CHARGET_DETECT, GPIO_INTR_ANYEDGE);
 
     //create a queue to handle gpio event from isr
     gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
     //start gpio task
-    xTaskCreate(gpio_task, "charger_task", 2048, NULL, 10, NULL);
+    xTaskCreate(gpio_task, "gpio_task", 2048, NULL, 10, NULL);
 
     //install gpio isr service
     gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
@@ -141,12 +225,10 @@ void gpio_set_intr()
     //remove isr handler for gpio number.
     gpio_isr_handler_remove(GPIO_INPUT_CHARGET_DETECT);
     //hook isr handler for specific gpio pin again
-    gpio_isr_handler_add(GPIO_INPUT_CHARGET_DETECT, gpio_isr_handler, (void*) GPIO_INPUT_IO_0);
+    gpio_isr_handler_add(GPIO_INPUT_CHARGET_DETECT, gpio_isr_handler, (void*) GPIO_INPUT_CHARGET_DETECT);
 
     printf("Minimum free heap size: %d bytes\n", esp_get_minimum_free_heap_size());
 #endif
-}
-
 void uart_4g_gpio_init()
 {
 	gpio_set_level(GPIO_OUTPUT_UART_CAT1_EN, 1);
@@ -165,7 +247,7 @@ void gpio_init(void)
     gpio_set_intr();
     printf("gpio init finish\r\n");
 }
-\
+
 int sendData(const char* logName, const char* data)
 {
     const int len = strlen(data);
@@ -413,7 +495,6 @@ void uart_4g_init(void)
     uart_param_config(UART_NUM_1, &uart_config);
     uart_set_pin(UART_NUM_1, TXD_PIN, RXD_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
 
-    // uart_4g_gpio_init();
     printf("uart init \r\n");
 }
 
@@ -454,8 +535,151 @@ void gpio_test()
 #endif
 }
 
+void temp_init()
+{
+	// Initialize touch pad peripheral, it will start a timer to run a filter
+	//ESP_LOGI(TAG, "Initializing Temperature sensor");
+	printf("Initializing Temperature sensor\r\n");
+	temp_sensor_config_t temp_sensor = TSENS_CONFIG_DEFAULT();
+	temp_sensor_get_config(&temp_sensor);
+	//ESP_LOGI(TAG, "default dac %d, clk_div %d", temp_sensor.dac_offset, temp_sensor.clk_div);
+	printf("default dac %d, clk_div %d\r\n", temp_sensor.dac_offset, temp_sensor.clk_div);
+	temp_sensor.dac_offset = TSENS_DAC_DEFAULT;
+	temp_sensor_set_config(temp_sensor);
+	temp_sensor_start();
+	//ESP_LOGI(TAG, "Temperature sensor started");
+	printf("Temperature sensor started\r\n");
+}
+
+float hardware_temp_get()
+{
+	float tsens_out;
+	//while (1) {
+		//vTaskDelay(1000 / portTICK_RATE_MS);
+		temp_sensor_read_celsius(&tsens_out);
+		//ESP_LOGI(TAG, "Temperature out celsius %f", tsens_out);
+		printf("Temperature out celsius %f\r\n", tsens_out);
+	//}
+	return tsens_out;
+}
+
+
+static void continuous_adc_init(uint16_t adc1_chan_mask, uint16_t adc2_chan_mask, adc_channel_t *channel, uint8_t channel_num)
+{
+    adc_digi_init_config_t adc_dma_config = {
+        .max_store_buf_size = 1024,
+        .conv_num_each_intr = TIMES,
+        .adc1_chan_mask = adc1_chan_mask,
+        .adc2_chan_mask = adc2_chan_mask,
+    };
+    ESP_ERROR_CHECK(adc_digi_initialize(&adc_dma_config));
+
+    adc_digi_configuration_t dig_cfg = {
+        .conv_limit_en = ADC_CONV_LIMIT_EN,
+        .conv_limit_num = 250,
+        .sample_freq_hz = 10 * 1000,
+        .conv_mode = ADC_CONV_MODE,
+        .format = ADC_OUTPUT_TYPE,
+    };
+
+    adc_digi_pattern_config_t adc_pattern[SOC_ADC_PATT_LEN_MAX] = {0};
+    dig_cfg.pattern_num = channel_num;
+    for (int i = 0; i < channel_num; i++) {
+        uint8_t unit = GET_UNIT(channel[i]);
+        uint8_t ch = channel[i] & 0x7;
+        adc_pattern[i].atten = ADC_ATTEN_DB_11;//ADC_ATTEN_DB_0;
+        adc_pattern[i].channel = ch;
+        adc_pattern[i].unit = unit;
+        adc_pattern[i].bit_width = SOC_ADC_DIGI_MAX_BITWIDTH;
+
+        ESP_LOGI(TAG, "adc_pattern[%d].atten is :%x", i, adc_pattern[i].atten);
+        ESP_LOGI(TAG, "adc_pattern[%d].channel is :%x", i, adc_pattern[i].channel);
+        ESP_LOGI(TAG, "adc_pattern[%d].unit is :%x", i, adc_pattern[i].unit);
+    }
+    dig_cfg.adc_pattern = adc_pattern;
+    ESP_ERROR_CHECK(adc_digi_controller_configure(&dig_cfg));
+}
+
+#if !CONFIG_IDF_TARGET_ESP32
+static bool check_valid_data(const adc_digi_output_data_t *data)
+{
+    const unsigned int unit = data->type2.unit;
+    if (unit > 2) return false;
+    if (data->type2.channel >= SOC_ADC_CHANNEL_NUM(unit)) return false;
+
+    return true;
+}
+#endif
+
+uint32_t get_channel(int channel_num)
+{
+    esp_err_t ret;
+    uint32_t ret_num = 0;
+    uint8_t result[TIMES] = {0};
+    memset(result, 0xcc, TIMES);
+
+    //continuous_adc_init(adc1_chan_mask, adc2_chan_mask, channel, sizeof(channel) / sizeof(adc_channel_t));
+    continuous_adc_init(adc1_chan_mask, 0, channel, sizeof(channel) / sizeof(adc_channel_t));
+    adc_digi_start();
+
+    ret = adc_digi_read_bytes(result, TIMES, &ret_num, ADC_MAX_DELAY);
+    adc_digi_output_data_t *p = (void*)&result[channel_num];
+
+    adc_digi_stop();
+    ret = adc_digi_deinitialize();
+    assert(ret == ESP_OK);
+
+    ESP_LOGI(TAG, "Unit: %d,_Channel: %d, Value: %x", p->type2.unit+1, p->type2.channel, p->type2.data);
+    return p->type2.data;
+}
+
+
+/**
+ * @brief Read a sequence of bytes from a MPU9250 sensor registers
+ */
+static esp_err_t mpu9250_register_read(uint8_t reg_addr, uint8_t *data, size_t len)
+{
+    return i2c_master_write_read_device(I2C_MASTER_NUM, MPU9250_SENSOR_ADDR, &reg_addr, 1, data, len, I2C_MASTER_TIMEOUT_MS / portTICK_RATE_MS);
+}
+
+/**
+ * @brief Write a byte to a MPU9250 sensor register
+ */
+static esp_err_t mpu9250_register_write_byte(uint8_t reg_addr, uint8_t data)
+{
+    int ret;
+    uint8_t write_buf[2] = {reg_addr, data};
+
+    ret = i2c_master_write_to_device(I2C_MASTER_NUM, MPU9250_SENSOR_ADDR, write_buf, sizeof(write_buf), I2C_MASTER_TIMEOUT_MS / portTICK_RATE_MS);
+
+    return ret;
+}
+
+/**
+ * @brief i2c master initialization
+ */
+static esp_err_t i2c_master_init(void)
+{
+    int i2c_master_port = I2C_MASTER_NUM;
+
+    i2c_config_t conf = {
+        .mode = I2C_MODE_MASTER,
+        .sda_io_num = I2C_MASTER_SDA_IO,
+        .scl_io_num = I2C_MASTER_SCL_IO,
+        .sda_pullup_en = GPIO_PULLUP_ENABLE,
+        .scl_pullup_en = GPIO_PULLUP_ENABLE,
+        .master.clk_speed = I2C_MASTER_FREQ_HZ,
+    };
+
+    i2c_param_config(i2c_master_port, &conf);
+
+    return i2c_driver_install(i2c_master_port, conf.mode, I2C_MASTER_RX_BUF_DISABLE, I2C_MASTER_TX_BUF_DISABLE, 0);
+}
+
+
 void hareware_main()
 {
+	temp_init();
 	gpio_init();//gpio2 3 13 8 9
 	uart_4g_init();//gpio15 10,uart 14 12
 	uart_4g_main();
@@ -481,4 +705,33 @@ void hareware_main()
 
 	//todo u
 	printf("hardware init finish\r\n");
+}
+
+int hardware_leds_ctl(int ledidx, int onoff)
+{
+	int gpio = ledidx;
+    gpio_set_level(gpio, onoff);
+    return 0;
+}
+
+int hardware_battery_get_cap()
+{
+	int slcap = get_channel(0)*100/255;
+	printf("channel data is %x\r\n", slcap);
+	return slcap;
+}
+
+
+//参考peripherals/wave_gen
+int hardware_voice_record()
+{
+	return 0;
+}
+
+int hardware_wakeup_4g_module()
+{
+	gpio_set_level(GPIO_OUTPUT_WAKEUP_4G, 0);
+	vTaskDelay(100 / portTICK_PERIOD_MS);
+	gpio_set_level(GPIO_OUTPUT_WAKEUP_4G, 1);
+	return 0;
 }
