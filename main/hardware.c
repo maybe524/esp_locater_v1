@@ -229,6 +229,8 @@ void gpio_set_intr()
 
     printf("Minimum free heap size: %d bytes\n", esp_get_minimum_free_heap_size());
 #endif
+}
+
 void uart_4g_gpio_init()
 {
 	gpio_set_level(GPIO_OUTPUT_UART_CAT1_EN, 1);
