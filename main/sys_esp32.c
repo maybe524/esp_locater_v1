@@ -431,7 +431,7 @@ int wifi_connect()
 	return 0;
 }
 
-#if 0
+#if 1
 int32_t storage_read(char *key)
 {
 //	// Initialize NVS

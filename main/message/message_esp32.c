@@ -99,12 +99,11 @@ void message_handle()
 			//message_alarm_report(); //6 message
 			break;
 		case 3:
-			printf("[temp sensor]%f\r\n", temp_read());
 			printf("[cap]%d\r\n", hardware_battery_get_cap());
 			//message_app_online_recv();//2 message
 			break;
 		case 4:
-
+			printf("[temp sensor]%f\r\n", temp_read());
 			//messsage_power_sleeep_recv();//2 message
 			break;
 
@@ -167,6 +166,15 @@ void message_handle()
 
 			printf("[%20s]%f\r\n", "temp sensor", temp_read());
 			printf("[%20s]%d\r\n", "cap", hardware_battery_get_cap());
+
+			wifi_init();
+			wifi_scan();
+			ulapcnt = wifi_get_info(&pstWifiInfo);
+			printf("[%20s]%d\r\n", "Wifi Cnt", ulapcnt);
+			for(ulIdx = 0;ulIdx < ulapcnt; ulIdx++)
+			{
+				printf("[SSID]%s\r\n", pstWifiInfo[ulIdx].ssid);
+			}
 			//messsage_temp_report_set();//20 message
 			break;
 		case 21:

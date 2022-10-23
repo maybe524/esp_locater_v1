@@ -30,7 +30,6 @@ int sys_ota();
 int wifi_get_info(STRU_WIFI_INFO **stRet);
 //int32_t storage_read(char *key);
 //void storage_write(char *key, int value);
-int wifi_test();
 #endif
 
 
