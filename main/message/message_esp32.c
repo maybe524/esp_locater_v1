@@ -41,7 +41,7 @@ float temp_read()
 int message_recv()
 {
 	//return (1+rand()%22);
-	return 20;
+	return 100;
 }
 
 void message_handle()
