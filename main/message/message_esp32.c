@@ -38,100 +38,10 @@ float temp_read()
 	return tsens_out;
 }
 
-void storage_read()
-{
-	// Initialize NVS
-	esp_err_t err = nvs_flash_init();
-	if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-		// NVS partition was truncated and needs to be erased
-		// Retry nvs_flash_init
-		ESP_ERROR_CHECK(nvs_flash_erase());
-		err = nvs_flash_init();
-	}
-	ESP_ERROR_CHECK( err );
-
-	// Open
-	printf("\n");
-	printf("Opening Non-Volatile Storage (NVS) handle... ");
-	nvs_handle_t my_handle;
-	err = nvs_open("storage", NVS_READWRITE, &my_handle);
-	if (err != ESP_OK) {
-		printf("Error (%s) opening NVS handle!\n", esp_err_to_name(err));
-	} else {
-		printf("Done\n");
-
-		// Read
-		printf("Reading restart counter from NVS ... ");
-		int32_t restart_counter = 0; // value will default to 0, if not set yet in NVS
-		err = nvs_get_i32(my_handle, "restart_counter", &restart_counter);
-		switch (err) {
-			case ESP_OK:
-				printf("Done\n");
-				printf("Restart counter = %d\n", restart_counter);
-				break;
-			case ESP_ERR_NVS_NOT_FOUND:
-				printf("The value is not initialized yet!\n");
-				break;
-			default :
-				printf("Error (%s) reading!\n", esp_err_to_name(err));
-		}
-
-		// Close
-		nvs_close(my_handle);
-	}
-
-	printf("\n");
-}
-
-void storage_write(int new_restart_counter)
-{
-	// Initialize NVS
-	esp_err_t err = nvs_flash_init();
-	if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-		// NVS partition was truncated and needs to be erased
-		// Retry nvs_flash_init
-		ESP_ERROR_CHECK(nvs_flash_erase());
-		err = nvs_flash_init();
-	}
-	ESP_ERROR_CHECK( err );
-
-	// Open
-	printf("\n");
-	printf("Opening Non-Volatile Storage (NVS) handle... ");
-	nvs_handle_t my_handle;
-	err = nvs_open("storage", NVS_READWRITE, &my_handle);
-	if (err != ESP_OK) {
-		printf("Error (%s) opening NVS handle!\n", esp_err_to_name(err));
-	} else {
-		printf("Done\n");
-
-		int32_t restart_counter = new_restart_counter; // value will default to 0, if not set yet in NVS
-
-		// Write
-		printf("Updating restart counter in NVS ... ");
-		//restart_counter++;
-		err = nvs_set_i32(my_handle, "restart_counter", restart_counter);
-		printf((err != ESP_OK) ? "Failed!\n" : "Done\n");
-
-		// Commit written value.
-		// After setting any values, nvs_commit() must be called to ensure changes are written
-		// to flash storage. Implementations may write to storage at other times,
-		// but this is not guaranteed.
-		printf("Committing updates in NVS ... ");
-		err = nvs_commit(my_handle);
-		printf((err != ESP_OK) ? "Failed!\n" : "Done\n");
-
-		// Close
-		nvs_close(my_handle);
-	}
-
-	printf("\n");
-}
-
 int message_recv()
 {
 	//return (1+rand()%22);
-	return 1;
+	return 20;
 }
 
 void message_handle()
@@ -146,7 +56,6 @@ void message_handle()
 	//wifi
 	nvs_init();
 
-
 	unsigned int ulIdx = 0;
 	unsigned int ulapcnt = 0;
 
@@ -156,7 +65,8 @@ void message_handle()
 	while(1)
 	{
 		int slRecv = message_recv();
-		printf("recv %d message\r\n", slRecv);
+		//printf("recv %d message\r\n", slRecv);
+		printf("*****[tese case%d]*****\r\n", slRecv);
 
 		switch(slRecv)
 		{
@@ -167,9 +77,10 @@ void message_handle()
 			//storage_write(restart_time);
 
 			//read and write storage
-			//key_val++;
-			//printf("read key =%d\r\n", storage_read("key"));
-			//storage_write("key", key_val);
+			//printf("*****[tese case1]*****\r\n");
+			key_val = storage_read("key");
+			printf("[storage key]read key =%d\r\n", key_val++);
+			storage_write("key", key_val);
 
 			//dpp_enrollee_init();
 
@@ -188,16 +99,16 @@ void message_handle()
 			//message_alarm_report(); //6 message
 			break;
 		case 3:
-			printf("temp sensor %f\r\n", temp_read());
-			printf("cap = %d\r\n", hardware_battery_get_cap());
+			printf("[temp sensor]%f\r\n", temp_read());
+			printf("[cap]%d\r\n", hardware_battery_get_cap());
 			//message_app_online_recv();//2 message
 			break;
 		case 4:
 
 			//messsage_power_sleeep_recv();//2 message
 			break;
-		case 5:
 
+		case 5:
 			wifi_set_user_pwd("CMCC-NtKi", "3d687272");
 			sys_ota();
 			//messsage_location_report_continus();//5 message
@@ -250,6 +161,12 @@ void message_handle()
 			//messsage_app_device_config_set();//19 message
 			break;
 		case 20:
+			key_val = storage_read("key");
+			printf("[storage key]read key =%d\r\n", key_val++);
+			storage_write("key", key_val);
+
+			printf("[%20s]%f\r\n", "temp sensor", temp_read());
+			printf("[%20s]%d\r\n", "cap", hardware_battery_get_cap());
 			//messsage_temp_report_set();//20 message
 			break;
 		case 21:

@@ -92,20 +92,31 @@ static const char *TAG = "i2c-simple-example";
 #define MPU9250_RESET_BIT                   7
 #define GPIO_OUTPUT_UART_CAT1_EN    7
 #define GPIO_OUTPUT_UART_CAT1_POWER    10
-#define GPIO_OUTPUT_LED_0    8
-#define GPIO_OUTPUT_LED_1    9
+#define GPIO_OUTPUT_LED_0    15//Red
+#define GPIO_OUTPUT_LED_1    14//Yellow
+#define GPIO_OUTPUT_WAKEUP_4G    13//esp32 wake up 4g
+#if 0
 #define GPIO_OUTPUT_PIN_SEL  ((1ULL<<GPIO_OUTPUT_UART_CAT1_EN) | (1ULL<<GPIO_OUTPUT_UART_CAT1_POWER) \
 			|(1ULL<<GPIO_OUTPUT_LED_0) |(1ULL<<GPIO_OUTPUT_LED_1))
+#endif
+#define GPIO_OUTPUT_PIN_SEL  ((1ULL<<GPIO_OUTPUT_UART_CAT1_EN) | (1ULL<<GPIO_OUTPUT_UART_CAT1_POWER) \
+		|(1ULL<<GPIO_OUTPUT_WAKEUP_4G))
 
 #define GPIO_OUTPUT_PIN_SEL1  ((1ULL<<GPIO_OUTPUT_LED_0) |(1ULL<<GPIO_OUTPUT_LED_1) | (1ULL<<GPIO_OUTPUT_UART_CAT1_POWER))
 #define GPIO_OUTPUT_PIN_SEL2  ((1ULL<<GPIO_OUTPUT_UART_CAT1_EN))
 
 //input
-#define GPIO_INPUT_CHARGET_DETECT    2
+#define GPIO_INPUT_CHARGET_DETECT    16
 #define GPIO_INPUT_BATTERY_DETECT    3
-
-#define GPIO_INPUT_PIN_SEL  ((1ULL<<GPIO_INPUT_CHARGET_DETECT) | (1ULL<<GPIO_INPUT_BATTERY_DETECT))
-
+#define GPIO_INPUT_SENSOR_DETECT1    6 //17
+#define GPIO_INPUT_4G_WAKEUP_ESP32_DETECT    2 //17
+//#define GPIO_INPUT_SENSOR_DETECT2    17
+#if 0
+#define GPIO_INPUT_PIN_SEL  ((1ULL<<GPIO_INPUT_CHARGET_DETECT) | (1ULL<<GPIO_INPUT_BATTERY_DETECT) \
+		| (1ULL<<GPIO_INPUT_SENSOR_DETECT1) | (1ULL<<GPIO_INPUT_4G_WAKEUP_ESP32_DETECT))
+#endif
+#define GPIO_INPUT_PIN_SEL  ((1ULL<<GPIO_INPUT_SENSOR_DETECT1) | (1ULL<<GPIO_INPUT_BATTERY_DETECT) \
+		| (1ULL<<GPIO_INPUT_4G_WAKEUP_ESP32_DETECT))
 #define ESP_INTR_FLAG_DEFAULT 0
 
 #define RX_TASK_TAG "rx_task"
@@ -221,6 +232,20 @@ void gpio_set_intr()
     gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
     //hook isr handler for specific gpio pin
     gpio_isr_handler_add(GPIO_INPUT_CHARGET_DETECT, gpio_isr_handler, (void*) GPIO_INPUT_CHARGET_DETECT);
+
+    //change gpio intrrupt type for one pin
+    gpio_set_intr_type(GPIO_INPUT_4G_WAKEUP_ESP32_DETECT, GPIO_INTR_ANYEDGE);
+#if 0
+    //create a queue to handle gpio event from isr
+    gpio_evt_queue1 = xQueueCreate(10, sizeof(uint32_t));
+    //start gpio task
+    xTaskCreate(gpio_task1, "gpio_task", 2048, NULL, 10, NULL);
+
+    //install gpio isr service
+    gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
+#endif
+    //hook isr handler for specific gpio pin
+    gpio_isr_handler_add(GPIO_INPUT_4G_WAKEUP_ESP32_DETECT, gpio_isr_handler, (void*) GPIO_INPUT_4G_WAKEUP_ESP32_DETECT);
 #if 0
     //remove isr handler for gpio number.
     gpio_isr_handler_remove(GPIO_INPUT_CHARGET_DETECT);
@@ -246,7 +271,7 @@ void gpio_init(void)
 	gpio_set_output();
     gpio_set_input();
 
-    gpio_set_intr();
+    //gpio_set_intr();
     printf("gpio init finish\r\n");
 }
 
