@@ -8,6 +8,21 @@
 #define DEFAULT_SCAN_LIST_SIZE 10
 extern char strWifiMac[DEFAULT_SCAN_LIST_SIZE][32];
 
+typedef enum{
+	ENUM_OTA_STS_NO_RUNNING = 0,
+	ENUM_OTA_STS_BEGIN,
+	ENUM_OTA_STS_CONNECTED,
+	ENUM_OTA_STS_CHECKED,
+	ENUM_OTA_STS_DOWNLOADING,
+	ENUM_OTA_STS_DOWNLOAD_FAIL,
+	ENUM_OTA_STS_DOWNLOAD_FINISH,
+	ENUM_OTA_STS_EARSE_FINISH,
+	ENUM_OTA_STS_READY_TO_REBOOT,
+	ENUM_OTA_STS_EARSE_FAIL_IMAGE_CORRUPTED,
+	ENUM_OTA_STS_EARSE_FAIL,
+	ENUM_OTA_STS_DEFAULT,
+}ENUM_OTA_STA;
+
 typedef struct{
 	int time;
 	int round;
@@ -27,6 +42,9 @@ int wifi_connect();
 int wifi_scan();
 int wifi_set_user_pwd(char *struser, char *strpwd);
 int sys_ota();
+int sys_ota_set_url(char *strurl);
+int sys_ota_sts_get();
+int sys_ota_reboot_set(int _reboot);
 int wifi_get_info(STRU_WIFI_INFO **stRet);
 //int32_t storage_read(char *key);
 //void storage_write(char *key, int value);

@@ -26,7 +26,11 @@
 #include "common.h"
 static const char *TAG = "system";
 unsigned int gulWifiConnect = 0;
-unsigned int gulRunning = 0;
+//unsigned int gulRunning = 0;
+unsigned int gulOTAReboot = 0;
+unsigned int gulOTAsts = 0;
+
+
 //connect
 #define CONFIG_EXAMPLE_CONNECT_WIFI   1
 #define CONFIG_EXAMPLE_WIFI_SSID	"CMCC-NtKi"
@@ -49,6 +53,8 @@ uint8_t server_cert_pem_end[] asm("_binary_ca_cert_pem_end");
 #define CONFIG_EXAMPLE_FIRMWARE_UPGRADE_URL "http://1.117.221.12:8080/ota/hello_world.bin"
 #define CONFIG_EXAMPLE_OTA_RECV_TIMEOUT 10000
 
+#define FIRMWARE_URL_LEN 320
+char frimwareURL[FIRMWARE_URL_LEN];
 
 /* Common functions for protocol examples, to establish Wi-Fi or Ethernet connection.
 
@@ -353,12 +359,36 @@ int wifi_scan()
 			strcpy((char *)&stWifi[i].ssid[0], (char *)&ap_info[i].ssid[0]);
 			//memcpy(&strWifiMac[i], "%s", ap_info[i].ssid);
 			//printf("strWifiMac[%d]=%s", i, strWifiMac[i]);
+
+			printf("%c%c:%c%c:%c%c:%c%c:%c%c:%c%c\0",
+					ap_info[i].bssid[0]&0xf0, ap_info[i].bssid[0]&0x0f,
+					ap_info[i].bssid[1]&0xf0, ap_info[i].bssid[1]&0x0f,
+					ap_info[i].bssid[2]&0xf0, ap_info[i].bssid[2]&0x0f,
+					ap_info[i].bssid[3]&0xf0, ap_info[i].bssid[3]&0x0f,
+					ap_info[i].bssid[4]&0xf0, ap_info[i].bssid[4]&0x0f,
+					ap_info[i].bssid[5]&0xf0, ap_info[i].bssid[5]&0x0f);
+
+			sprintf(stWifi[i].mac, "%c%c:%c%c:%c%c:%c%c:%c%c:%c%c\0",
+					ap_info[i].bssid[0]&0xf0, ap_info[i].bssid[0]&0x0f,
+					ap_info[i].bssid[1]&0xf0, ap_info[i].bssid[1]&0x0f,
+					ap_info[i].bssid[2]&0xf0, ap_info[i].bssid[2]&0x0f,
+					ap_info[i].bssid[3]&0xf0, ap_info[i].bssid[3]&0x0f,
+					ap_info[i].bssid[4]&0xf0, ap_info[i].bssid[4]&0x0f,
+					ap_info[i].bssid[5]&0xf0, ap_info[i].bssid[5]&0x0f);
+
+			//ESP_LOGI(TAG, "BSSID \t\t%s:%s:%s", ap_info[i].bssid[0], ap_info[i].bssid[1],ap_info[i].bssid[2]);
+			ESP_LOGI(TAG, "SSID \t\t%s", ap_info[i].ssid);
+			ESP_LOGI(TAG, "BSSID \t\t%s", ap_info[i].bssid);
+			stWifi[i].rssi = ap_info[i].rssi;
 			ESP_LOGI(TAG, "RSSI \t\t%d", ap_info[i].rssi);
 			print_auth_mode(ap_info[i].authmode);
 			if (ap_info[i].authmode != WIFI_AUTH_WEP) {
 				print_cipher_type(ap_info[i].pairwise_cipher, ap_info[i].group_cipher);
 			}
 			ESP_LOGI(TAG, "Channel \t\t%d\n", ap_info[i].primary);
+
+			//printf("stWifi SSID: %s\n", stWifi[i].ssid);
+			ESP_LOGI(TAG, "stWifi RSSI: %d\n", stWifi[i].rssi);
 		}
 //		vTaskDelay(5000 / portTICK_PERIOD_MS);
 //    }
@@ -419,6 +449,7 @@ int wifi_connect()
 
 		gulWifiConnect = 1;
 	}
+#if 0
 	else //if(example_connect() == ESP_ERR_INVALID_STATE)
 	{
 
@@ -428,6 +459,7 @@ int wifi_connect()
 		ESP_ERROR_CHECK(example_connect());
 
 	}
+#endif
 	return 0;
 }
 
@@ -689,7 +721,7 @@ static void on_wifi_connect(void *esp_netif, esp_event_base_t event_base,
 
 static esp_netif_t *wifi_start(void)
 {
-	printf("wifi_start111111111111111\n");
+
     char *desc;
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
@@ -702,14 +734,14 @@ static esp_netif_t *wifi_start(void)
     esp_netif_t *netif = esp_netif_create_wifi(WIFI_IF_STA, &esp_netif_config);
     free(desc);
     esp_wifi_set_default_wifi_sta_handlers();
-    printf("wifi_start2222222222222222\n");
+
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &on_wifi_disconnect, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &on_got_ip, NULL));
 #ifdef CONFIG_EXAMPLE_CONNECT_IPV6
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_CONNECTED, &on_wifi_connect, netif));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_GOT_IP6, &on_got_ipv6, NULL));
 #endif
-    printf("wifi_start333333333333\n");
+
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
 #if 1
     wifi_config_t wifi_config;
@@ -728,7 +760,7 @@ static esp_netif_t *wifi_start(void)
         },
     };
 #endif
-	printf("wifi_start4444444444 %s ..\n", wifi_config.sta.ssid);
+
     ESP_LOGI(TAG, "Connecting to %s...%s", wifi_config.sta.ssid, wifi_config.sta.password);
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
@@ -826,18 +858,20 @@ static esp_err_t _http_client_init_cb(esp_http_client_handle_t http_client)
 
 void advanced_ota_example_task(void *pvParameter)
 {
-	gulRunning = 1;
+	gulOTAsts = ENUM_OTA_STS_BEGIN;
 
-    ESP_LOGI(TAG, "Starting Advanced OTA example!!");
-    printf("Firmware url: %s\r\n", CONFIG_EXAMPLE_FIRMWARE_UPGRADE_URL);
+    ESP_LOGI(TAG, "Starting Advanced OTA example [%d]!!", gulOTAsts);
+    printf("Firmware url: %s\r\n", frimwareURL); //CONFIG_EXAMPLE_FIRMWARE_UPGRADE_URL
     esp_err_t ota_finish_err = ESP_OK;
     esp_http_client_config_t config = {
-        .url = CONFIG_EXAMPLE_FIRMWARE_UPGRADE_URL,
+        //.url = CONFIG_EXAMPLE_FIRMWARE_UPGRADE_URL,
         .cert_pem = (char *)server_cert_pem_start,
         .timeout_ms = CONFIG_EXAMPLE_OTA_RECV_TIMEOUT,
         .keep_alive_enable = true,
     };
 
+	//memcpy(config.url,  frimwareURL, FIRMWARE_URL_LEN);
+	config.url = frimwareURL;
 #ifdef CONFIG_EXAMPLE_FIRMWARE_UPGRADE_URL_FROM_STDIN
     char url_buf[OTA_URL_SIZE];
     if (strcmp(config.url, "FROM_STDIN") == 0) {
@@ -864,15 +898,17 @@ void advanced_ota_example_task(void *pvParameter)
         .max_http_request_size = CONFIG_EXAMPLE_HTTP_REQUEST_SIZE,
 #endif
     };
-
+    //gulOTAsts = ENUM_OTA_STS_BEGIN;
     esp_https_ota_handle_t https_ota_handle = NULL;
     esp_err_t err = esp_https_ota_begin(&ota_config, &https_ota_handle);
 
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "ESP HTTPS OTA Begin failed");
+    	gulOTAsts = ENUM_OTA_STS_NO_RUNNING;
+        ESP_LOGE(TAG, "ESP HTTPS OTA Begin failed, reset the ota thread sts:%d", gulOTAsts);
         vTaskDelete(NULL);
+        return;
     }
-
+    gulOTAsts = ENUM_OTA_STS_CONNECTED;
     esp_app_desc_t app_desc;
     err = esp_https_ota_get_img_desc(https_ota_handle, &app_desc);
     if (err != ESP_OK) {
@@ -884,12 +920,14 @@ void advanced_ota_example_task(void *pvParameter)
         ESP_LOGE(TAG, "image header verification failed");
         goto ota_end;
     }
-
+    gulOTAsts = ENUM_OTA_STS_CHECKED;
     while (1) {
         err = esp_https_ota_perform(https_ota_handle);
         if (err != ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
             break;
         }
+
+        gulOTAsts = ENUM_OTA_STS_DOWNLOADING;
         // esp_https_ota_perform returns after every read operation which gives user the ability to
         // monitor the status of OTA upgrade by calling esp_https_ota_get_image_len_read, which gives length of image
         // data read so far.
@@ -899,43 +937,95 @@ void advanced_ota_example_task(void *pvParameter)
     if (esp_https_ota_is_complete_data_received(https_ota_handle) != true) {
         // the OTA image was not completely received and user can customise the response to this situation.
         ESP_LOGE(TAG, "Complete data was not received.");
+        gulOTAsts = ENUM_OTA_STS_DOWNLOAD_FAIL;
     } else {
     	ESP_LOGI(TAG, "Complete data was received.");
+    	gulOTAsts = ENUM_OTA_STS_DOWNLOAD_FINISH;
         ota_finish_err = esp_https_ota_finish(https_ota_handle);
         if ((err == ESP_OK) && (ota_finish_err == ESP_OK)) {
+        	gulOTAsts = ENUM_OTA_STS_EARSE_FINISH;
             ESP_LOGI(TAG, "ESP_HTTPS_OTA upgrade successful. Rebooting ...");
             vTaskDelay(1000 / portTICK_PERIOD_MS);
-            esp_restart();
+            if(gulOTAReboot)
+            {
+            	gulOTAsts = ENUM_OTA_STS_READY_TO_REBOOT;
+            	esp_restart();
+            }
         } else {
             if (ota_finish_err == ESP_ERR_OTA_VALIDATE_FAILED) {
                 ESP_LOGE(TAG, "Image validation failed, image is corrupted");
+                gulOTAsts = ENUM_OTA_STS_EARSE_FAIL_IMAGE_CORRUPTED;
             }
             ESP_LOGE(TAG, "ESP_HTTPS_OTA upgrade failed 0x%x", ota_finish_err);
+            gulOTAsts = ENUM_OTA_STS_EARSE_FAIL;
             vTaskDelete(NULL);
         }
     }
 
 ota_end:
     esp_https_ota_abort(https_ota_handle);
-    ESP_LOGE(TAG, "ESP_HTTPS_OTA upgrade failed");
+    gulOTAsts = ENUM_OTA_STS_NO_RUNNING;
+    ESP_LOGE(TAG, "ESP_HTTPS_OTA upgrade failed, %d", gulOTAsts);
     vTaskDelete(NULL);
 
-    gulRunning = 0;
+
 }
 
 //system/ota
-int sys_ota()
+int sys_ota(int reboot)
 {
 	printf("sys ota\r\n");
 
 	wifi_connect();
 
-	if(!gulRunning)
+	if(!gulOTAsts)
+	{
 		xTaskCreate(&advanced_ota_example_task, "advanced_ota_example_task", 1024 * 8, NULL, 5, NULL);
+	}
 	else
-		ESP_LOGE(TAG, "OTA already Running!");
+	{
+		ESP_LOGE(TAG, "OTA already Running! %d", gulOTAsts);
+	}
 
-	return gulRunning;
+
+	return gulOTAsts;
+}
+
+int sys_ota_set_url(char *strurl)
+{
+	if(!strurl)
+	{
+		ESP_LOGE(TAG, "Input url Is Null");
+		return -1;
+	}
+	ESP_LOGI(TAG, "set ota URL %s", strurl);
+
+	if(strlen(strurl) > FIRMWARE_URL_LEN)
+	{
+		ESP_LOGE(TAG, "url is too long than %d", FIRMWARE_URL_LEN);
+		return -2;
+	}
+
+	if(!strcmp(strurl, frimwareURL))
+	{
+		ESP_LOGW(TAG, "URL %s %s is samme!", strurl, frimwareURL);
+		return -1;
+	}
+
+	strcpy(frimwareURL, strurl);
+	//memcpy(frimwareURL, strurl, FIRMWARE_URL_LEN);
+	return 0;
+}
+
+int sys_ota_sts_get()
+{
+	return gulOTAsts;
+}
+
+int sys_ota_reboot_set(int _reboot)
+{
+	gulOTAReboot = !!_reboot;
+	return gulOTAReboot;
 }
 
 int wifi_set_user_pwd(char *struser, char *strpwd)

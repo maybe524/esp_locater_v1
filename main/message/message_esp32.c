@@ -44,6 +44,25 @@ int message_recv()
 	return 100;
 }
 
+void wifi_sts_thread()
+{
+	static int ulWifiThread = 0;
+	if(!ulWifiThread)
+	{
+		while(1)
+		{
+			ulWifiThread = 1;
+			printf("[%20s]%d\r\n", "OTA STS", sys_ota_sts_get());
+			vTaskDelay(1000 / portTICK_PERIOD_MS);
+
+			if(ENUM_OTA_STS_EARSE_FINISH == sys_ota_sts_get())
+			{
+				esp_restart();
+			}
+		}
+	}
+}
+
 void message_handle()
 {
 	int restart_time = 0;
@@ -94,6 +113,8 @@ void message_handle()
 			for(ulIdx = 0;ulIdx < ulapcnt; ulIdx++)
 			{
 				printf("SSID:%s\r\n", pstWifiInfo[ulIdx].ssid);
+				printf("MAC:%s\r\n", pstWifiInfo[ulIdx].mac);
+				printf("RSSI:%d\r\n", pstWifiInfo[ulIdx].rssi);
 			}
 #endif
 			//message_alarm_report(); //6 message
@@ -127,8 +148,9 @@ void message_handle()
 			break;
 		case 10:
 			wifi_init();
-			wifi_scan();
+			//wifi_scan();
 			wifi_set_user_pwd("CMCC-NtKi", "3d687272");
+			sys_ota_set_url("http://192.168.1.6:8080/hello_world.bin");
 			sys_ota();
 			//messsage_wifi_location_report_continus();//10 message
 			break;
@@ -220,7 +242,7 @@ void message_init()
     pthread_t thread1, thread2;
     esp_pthread_cfg_t esp_pthread_cfg;
     int res;
-
+#if 0
     // Create a pthread with the default parameters
     res = pthread_create(&thread1, NULL, message_handle, NULL);
     if(!res)
@@ -233,4 +255,7 @@ void message_init()
     	//assert(res == 0);
     	printf("message init fail\r\n");
     }
+#endif
+    xTaskCreate(&message_handle, "message_handle", 1024 * 8, NULL, 5, NULL);
+    xTaskCreate(&wifi_sts_thread, "wifi_sts_thread", 1024 * 8, NULL, 5, NULL);
 }
