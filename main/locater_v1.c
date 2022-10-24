@@ -43,6 +43,12 @@ static bool s_is_locater_uart_need_wifi_scan_rssi_by_mac = false;
 static unsigned int s_is_locater_uart_need_wifi_scan_rssi_by_mac_app_idx = 0;
 static pthread_mutex_t s_locater_uart_4g_module_mutex;
 static char *p_serial = "ABCABCABC";
+static bool s_is_locater_uart_need_ota = false;
+static bool s_is_locater_uart_ota_broadcast_stop_task = false;
+static unsigned s_locater_uart_ota_stop_task_count = 0;
+static char s_is_locater_uart_ota_wifi_mac[32] = {0};
+static char s_is_locater_uart_ota_wifi_password[32] = {0};
+static char s_is_locater_uart_ota_firmware_url[1024] = {0};
 
 
 static unsigned int locater_uart_get_temperature(void);
@@ -2453,6 +2459,24 @@ static int locater_uart_get_location_info(void)
         return ret;
     }
 
+    //获取查询当前配置
+    p_atcmd = "AT+QGPSCFG=\"outport\"\r\n";
+    p_want_ack_str = "OK";
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, p_want_ack_str, buff, sizeof(buff), 1000, 0);
+    if (ret < 0) {
+        printf("locate_info, get outport failed\n");
+        return ret;
+    }
+
+    p_atcmd = "AT+QGPSCFG=\"outport\",uart1\r\n";
+    p_want_ack_str = "OK";
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, p_want_ack_str, buff, sizeof(buff), 1000, 0);
+    if (ret < 0) {
+        printf("locate_info, set outport failed\n");
+        return ret;
+    }
+
+
     /*
     *  选择混合定位
     *  0 单GPS
@@ -2548,13 +2572,13 @@ static int locater_uart_get_ati(void)
 }
 
 /**
- * @brief 获取一次定位的应用
+ * @brief 定位的所有任务
  * 
  * @param arg  [in ] 
  * 
  * @details 
  */
-static void locater_uart_app_once_positioning_task(void *arg)
+static void locater_uart_app_location_misc_task(void *arg)
 {
     unsigned int step = 0, step_bakup = 0;
     char mqtt_topic_str_buf[256] = {0}, mqtt_payload_str_buf[256] = {0};
@@ -2564,18 +2588,20 @@ static void locater_uart_app_once_positioning_task(void *arg)
     while (true) {
 LOCATOR_UART_FSM_COM_STEP_ENTRY(0) {
         // 循环等待标志位
-        if (!s_is_locater_uart_once_positioning) {
+        if (s_is_locater_uart_once_positioning)
+            step = 1;
+        else {
             v_task_delay(1000 / port_tick_rate_ms);
             continue;
         }
+      }
 
+LOCATOR_UART_FSM_COM_STEP_ENTRY(1) {
         // 标志位置位false
         printf("app_once_positioning, detect device once positioning\n");
         s_is_locater_uart_once_positioning = false;
         step++;
-      }
 
-LOCATOR_UART_FSM_COM_STEP_ENTRY(1) {
         /*
         *  如果主程序告知设备没有准备好，那么放弃执行任务。
         */
@@ -2610,7 +2636,7 @@ static struct locator_uart_wifi_mac_info_s s_locator_uart_wifi_info_array[64] = 
 static unsigned int s_locator_uart_wifi_info_size = 0;
 static unsigned char s_locator_uart_wifi_scan_mac[32] = {0};
 
-static int locater_uart_wifi_set_mac_array(char *p_mqtt_payload)
+static int locater_uart_app_set_wifi_scan_mac_array(char *p_mqtt_payload)
 {
     int i = 0;
     struct locator_uart_protocol_app_set_wifi_mac_array_payload_fmt_s *p_mac_array = \
@@ -2648,6 +2674,16 @@ static int locater_uart_wifi_set_mac_array(char *p_mqtt_payload)
     return 0;
 }
 
+static int locater_uart_app_set_user_setting(char *p_mqtt_payload)
+{
+    struct locator_uart_protocol_app_set_user_setting_payload_fmt_s *p_user_setting = \
+            (struct locator_uart_protocol_app_set_user_setting_payload_fmt_s *)p_mqtt_payload;
+
+
+
+    return 0;
+}
+
 /**
  * @brief WIFI的所有任务
  * 
@@ -2666,7 +2702,7 @@ static void locater_uart_app_wifi_misc_task(void *arg)
 
     while (true) {
 LOCATOR_UART_FSM_COM_STEP_ENTRY(0) {
-        if (!s_is_locater_uart_need_wifi_scan_rssi_by_mac_array)
+        if (s_is_locater_uart_need_wifi_scan_rssi_by_mac_array)
             step = 1;
         else if (s_is_locater_uart_need_wifi_scan_rssi_by_mac)
             step = 2;
@@ -2748,6 +2784,101 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(2) {
       }
     }
 
+    return;
+}
+
+
+/**
+ * @brief 在topic里边获取mac地址和密码，在payload获取下载固件的地址链接
+ * 
+ * @param p_wifi_mac_password_str  [in ] 
+ * @param p_mqtt_payload  [in ] 
+ * @return int 
+ * 
+ * @details 
+ */
+static int locater_uart_app_set_ota_conf(char *p_wifi_mac_password_str, char *p_mqtt_payload)
+{
+    struct locator_uart_protocol_app_set_ota_conf_payload_fmt_s *p_url = \
+            (struct locator_uart_protocol_app_set_ota_conf_payload_fmt_s *)p_mqtt_payload;
+    char *p_mac = NULL;
+
+    printf("app_set_ota_config, start\n");
+
+    // 获取WIFI的MAC地址
+    p_mac = strstr(p_wifi_mac_password_str, "/");
+    if (!p_mac) {
+        printf("app_set_ota_config, not found mac str\n");
+        return -1;
+    }
+    p_mac++;
+    if (!(*p_mac)) {
+        printf("app_set_ota_config, mac is error\n");
+        return -2;
+    }
+    memset(s_is_locater_uart_ota_wifi_mac, 0, sizeof(s_is_locater_uart_ota_wifi_mac));
+    strncpy(s_is_locater_uart_ota_wifi_mac, p_mac, 17);
+
+    // 获取WIFI的密码
+    p_mac += 17;
+    memset(s_is_locater_uart_ota_wifi_password, 0, sizeof(s_is_locater_uart_ota_wifi_password));
+    strncpy(s_is_locater_uart_ota_wifi_password, p_mac, 17);
+
+    // 获取固件的URL
+    memset(s_is_locater_uart_ota_firmware_url, 0, sizeof(s_is_locater_uart_ota_firmware_url));
+    strncpy(s_is_locater_uart_ota_wifi_password, p_url->url, p_url->url_len);
+
+    return 0;
+}
+
+static void locater_uart_app_ota_misc_task(void *arg)
+{
+    unsigned int step = 0, step_bakup = 0;
+	STRU_WIFI_INFO *p_wifi_info  = NULL;
+    unsigned int wifi_cnt = 0, wifi_idx = 0;
+    char mqtt_topic_str_buf[256] = {0}, mqtt_payload_str_buf[256] = {0};
+    unsigned int qos = 0, remain = 0;
+    unsigned int i = 0, client_handle = 0;
+    unsigned int locater_uart_ota_stop_task_count_bak = 0;
+
+    while (true) {
+    // 开机启动，检查OTA的状态
+LOCATOR_UART_FSM_COM_STEP_ENTRY(0) {
+        if (s_is_locater_uart_need_ota)
+            step = 1;
+        else {
+            v_task_delay(1000 / port_tick_rate_ms);
+            continue;
+        }
+      }
+
+    // 广播所有任务停止
+LOCATOR_UART_FSM_COM_STEP_ENTRY(1) {
+        printf("uart_app_ota, detect ota start\n");
+        s_is_locater_uart_need_ota = false;
+        s_is_locater_uart_ota_broadcast_stop_task = true;
+        step++;
+      }
+
+    // 等待所有的任务停止
+LOCATOR_UART_FSM_COM_STEP_ENTRY(2) {
+        if (s_locater_uart_ota_stop_task_count < 10 && \
+                locater_uart_ota_stop_task_count_bak != s_locater_uart_ota_stop_task_count)
+        {
+            printf("uart_app_ota, detect curr stop task count: %d\n", s_locater_uart_ota_stop_task_count);
+            locater_uart_ota_stop_task_count_bak = s_locater_uart_ota_stop_task_count;
+            v_task_delay(1000 / port_tick_rate_ms);
+            continue;
+        }
+        step++;
+      }
+    }
+
+    return;
+}
+
+static void locater_uart_app_temp_misc_task(void *arg)
+{
     return;
 }
 
@@ -2972,6 +3103,7 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(3) {
         unsigned int event_count = 0, split_count = 0, split_index = 0, payload_len = 0;
         unsigned int client_idx = 0, msg_id = 0, recv_id = 0, err_code = 0;
         char *p_topic = NULL, *p_payload = NULL;
+        unsigned int str_len = 0;
 
         event_count = uart_event_get_busy_item_count();
         if (!event_count) {
@@ -2992,8 +3124,7 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(3) {
         *  MQTT 连接并上报 URC。
         *  [2] +QMTRECV: <client_idx>,<msgid>,<topic>[,<payload_len>],<payload>
         *  当客户端接收到 MQTT 服务器的数据包会上报 URC。 
-        *  [3] +QMTRECV: <client_idx>,<recv_id>
-        *  当从 MQTT 服务器接收的消息存储到缓存
+        *  [3] +QMTRECV: <client_idx>,<recv_id>当从 MQTT 服务器接收的消息存储到缓存
         *  时上报 URC。 [4] +QMTPING: <client_idx>,<result>
         *  当 MQTT 链层状态变化时，客户端会关闭MQTT 连接并上报此 URC。
         */
@@ -3107,15 +3238,32 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(3) {
             sprintf(mqtt_topic_str_buf, "\"%s/0/8N\"", p_serial);
             if (!strncmp(p_topic, mqtt_topic_str_buf, strlen(mqtt_topic_str_buf))) {
                 printf("main_event_centre, device recv wifi mac list\n");
-                locater_uart_wifi_set_mac_array(p_payload);
+                locater_uart_app_set_wifi_scan_mac_array(p_payload);
                 continue;
             }
 
+            // 10.3，收到手机端下发指令，针对某个wifi的mac扫描wifi信号
             sprintf(mqtt_topic_str_buf, "%s", "3N");
             if (strstr(p_topic, mqtt_topic_str_buf)) {
                 printf("main_event_centre, device recv wifi mac\n");
                 s_is_locater_uart_need_wifi_scan_rssi_by_mac = true;
                 s_is_locater_uart_need_wifi_scan_rssi_by_mac_app_idx = *(unsigned int *)p_payload;
+                continue;
+            }
+
+            // 11.1，OTA升级
+            str_len = strlen(p_topic);
+            if (str_len >= 1 && p_topic[str_len - 1] == 'J') {
+                printf("main_event_centre, device ota command\n");
+                locater_uart_app_set_ota_conf(p_topic, p_payload);
+                s_is_locater_uart_need_ota = true;
+                continue;
+            }
+
+            sprintf(mqtt_topic_str_buf, "\"%s/0/1m\"", p_serial);
+            if (!strncmp(p_topic, mqtt_topic_str_buf, strlen(mqtt_topic_str_buf))) {
+                printf("main_event_centre, device recv user setting\n");
+                locater_uart_app_set_user_setting(p_payload);
                 continue;
             }
 
@@ -3149,8 +3297,10 @@ int locater_uart_init(void)
     ret = pthread_mutex_init(&s_locater_uart_4g_module_mutex, 0);
 
     xTaskCreate(locater_uart_app_main_task, "app_main_task", 1024 * 30, NULL, config_max_priorities - 1, NULL);
-    xTaskCreate(locater_uart_app_once_positioning_task, "app_once_positioning_task", 1024 * 30, NULL, config_max_priorities - 1, NULL);
-    xTaskCreate(locater_uart_app_wifi_misc_task, "locater_uart_app_wifi_misc_task", 1024 * 30, NULL, config_max_priorities - 1, NULL);
+    xTaskCreate(locater_uart_app_location_misc_task, "app_location_misc_task", 1024 * 30, NULL, config_max_priorities - 1, NULL);
+    xTaskCreate(locater_uart_app_wifi_misc_task, "app_wifi_misc_task", 1024 * 30, NULL, config_max_priorities - 1, NULL);
+    xTaskCreate(locater_uart_app_ota_misc_task, "app_ota_misc_task", 1024 * 30, NULL, config_max_priorities - 1, NULL);
+    xTaskCreate(locater_uart_app_temp_misc_task, "app_temp_misc_task", 1024 * 30, NULL, config_max_priorities - 1, NULL);
 
     return 0;
 }
