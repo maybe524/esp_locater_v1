@@ -26,7 +26,7 @@
 #include "common.h"
 static const char *TAG = "system";
 unsigned int gulWifiConnect = 0;
-//unsigned int gulRunning = 0;
+unsigned int gulRunning = 0;
 unsigned int gulOTAReboot = 0;
 unsigned int gulOTAsts = 0;
 
@@ -37,8 +37,9 @@ unsigned int gulOTAsts = 0;
 #define CONFIG_EXAMPLE_WIFI_PASSWORD	"3d687272"
 
 #define WIFI_TRY_TIME 5
+#define SSID_LEN 32
 #define WIFI_LEN 64
-char gstrssid[WIFI_LEN];//CONFIG_EXAMPLE_WIFI_SSID,
+char gstrssid[SSID_LEN];//CONFIG_EXAMPLE_WIFI_SSID,
 char gstrpwd[WIFI_LEN];//CONFIG_EXAMPLE_WIFI_PASSWORD,
 unsigned int gulWifiApcnt = 0;
 //ota
@@ -348,47 +349,45 @@ int wifi_scan()
     ESP_ERROR_CHECK(esp_wifi_scan_stop());
 //    while(1)
 //    {
-		ESP_LOGI(TAG, "Total APs scanned = %u", ap_count);
+		ESP_LOGD(TAG, "Total APs scanned = %u", ap_count);
 		if(ap_count >= DEFAULT_SCAN_LIST_SIZE)
 			gulWifiApcnt = DEFAULT_SCAN_LIST_SIZE;
 		else
 			gulWifiApcnt = ap_count;
 		for (int i = 0; i < gulWifiApcnt; i++) {
-			ESP_LOGI(TAG, "SSID \t\t%s", ap_info[i].ssid);
 			//memcpy(&stWifi[i].ssid, ap_info[i].ssid, strlen(&ap_info[i].ssid[0]));
 			strcpy((char *)&stWifi[i].ssid[0], (char *)&ap_info[i].ssid[0]);
-			//memcpy(&strWifiMac[i], "%s", ap_info[i].ssid);
-			//printf("strWifiMac[%d]=%s", i, strWifiMac[i]);
-
-			printf("%c%c:%c%c:%c%c:%c%c:%c%c:%c%c\0",
-					ap_info[i].bssid[0]&0xf0, ap_info[i].bssid[0]&0x0f,
-					ap_info[i].bssid[1]&0xf0, ap_info[i].bssid[1]&0x0f,
-					ap_info[i].bssid[2]&0xf0, ap_info[i].bssid[2]&0x0f,
-					ap_info[i].bssid[3]&0xf0, ap_info[i].bssid[3]&0x0f,
-					ap_info[i].bssid[4]&0xf0, ap_info[i].bssid[4]&0x0f,
-					ap_info[i].bssid[5]&0xf0, ap_info[i].bssid[5]&0x0f);
-
-			sprintf(stWifi[i].mac, "%c%c:%c%c:%c%c:%c%c:%c%c:%c%c\0",
-					ap_info[i].bssid[0]&0xf0, ap_info[i].bssid[0]&0x0f,
-					ap_info[i].bssid[1]&0xf0, ap_info[i].bssid[1]&0x0f,
-					ap_info[i].bssid[2]&0xf0, ap_info[i].bssid[2]&0x0f,
-					ap_info[i].bssid[3]&0xf0, ap_info[i].bssid[3]&0x0f,
-					ap_info[i].bssid[4]&0xf0, ap_info[i].bssid[4]&0x0f,
-					ap_info[i].bssid[5]&0xf0, ap_info[i].bssid[5]&0x0f);
-
-			//ESP_LOGI(TAG, "BSSID \t\t%s:%s:%s", ap_info[i].bssid[0], ap_info[i].bssid[1],ap_info[i].bssid[2]);
-			ESP_LOGI(TAG, "SSID \t\t%s", ap_info[i].ssid);
-			ESP_LOGI(TAG, "BSSID \t\t%s", ap_info[i].bssid);
 			stWifi[i].rssi = ap_info[i].rssi;
-			ESP_LOGI(TAG, "RSSI \t\t%d", ap_info[i].rssi);
+#if 0
+			printf("%x:%x:%x:%x:%x:%x\r\n",
+				ap_info[i].bssid[0],
+				ap_info[i].bssid[1],
+				ap_info[i].bssid[2],
+				ap_info[i].bssid[3],
+				ap_info[i].bssid[4],
+				ap_info[i].bssid[5]);
+#else
+			sprintf(stWifi[i].mac, "%x%x%x%x%x%x\0",
+				ap_info[i].bssid[0],
+				ap_info[i].bssid[1],
+				ap_info[i].bssid[2],
+				ap_info[i].bssid[3],
+				ap_info[i].bssid[4],
+				ap_info[i].bssid[5]);
+
+#endif
+			//memcpy(stWifi[i].bssid, ap_info[i].bssid, 6);
+
+			ESP_LOGD(TAG, "SSID \t\t%s", ap_info[i].ssid);
+			ESP_LOGD(TAG, "BSSID \t\t%s", stWifi[i].mac);
+			ESP_LOGD(TAG, "RSSI \t\t%d", ap_info[i].rssi);
+
 			print_auth_mode(ap_info[i].authmode);
 			if (ap_info[i].authmode != WIFI_AUTH_WEP) {
-				print_cipher_type(ap_info[i].pairwise_cipher, ap_info[i].group_cipher);
+				//print_cipher_type(ap_info[i].pairwise_cipher, ap_info[i].group_cipher);
 			}
-			ESP_LOGI(TAG, "Channel \t\t%d\n", ap_info[i].primary);
-
-			//printf("stWifi SSID: %s\n", stWifi[i].ssid);
-			ESP_LOGI(TAG, "stWifi RSSI: %d\n", stWifi[i].rssi);
+			ESP_LOGD(TAG, "Channel \t\t%d\n", ap_info[i].primary);
+			ESP_LOGD(TAG, "stWifi RSSI: %d\n", stWifi[i].rssi);
 		}
 //		vTaskDelay(5000 / portTICK_PERIOD_MS);
 //    }
@@ -655,7 +654,9 @@ esp_err_t example_connect(void)
         return ESP_ERR_INVALID_STATE;
     }
 #endif
-    start();
+
+    start();//
+
     ESP_ERROR_CHECK(esp_register_shutdown_handler(&stop));
     ESP_LOGI(TAG, "Waiting for IP(s)");
     for (int i = 0; i < NR_OF_IP_ADDRESSES_TO_WAIT_FOR; ++i) {
@@ -746,8 +747,22 @@ static esp_netif_t *wifi_start(void)
 #if 1
     wifi_config_t wifi_config;
     memset(&wifi_config, 0, sizeof(wifi_config_t));
-    memcpy(wifi_config.sta.ssid,  gstrssid, WIFI_LEN);
-    memcpy(wifi_config.sta.password,  gstrpwd, WIFI_LEN);
+    if(strlen(gstrssid))
+    	memcpy(wifi_config.sta.ssid,  gstrssid, SSID_LEN);
+    else
+    {
+    	memcpy(wifi_config.sta.ssid,  CONFIG_EXAMPLE_WIFI_SSID, strlen(CONFIG_EXAMPLE_WIFI_SSID));
+    	ESP_LOGW(TAG, "Set dafault ssid %s", wifi_config.sta.ssid);
+    }
+
+    if(strlen(gstrssid))
+    	 memcpy(wifi_config.sta.password,  gstrpwd, WIFI_LEN);
+    else
+    {
+    	memcpy(wifi_config.sta.password,  CONFIG_EXAMPLE_WIFI_PASSWORD, strlen(CONFIG_EXAMPLE_WIFI_PASSWORD));
+    	ESP_LOGW(TAG, "Set dafault pwd %s", wifi_config.sta.password);
+    }
+
 #else
     wifi_config_t wifi_config = {
         .sta = {
@@ -858,9 +873,16 @@ static esp_err_t _http_client_init_cb(esp_http_client_handle_t http_client)
 
 void advanced_ota_example_task(void *pvParameter)
 {
-	gulOTAsts = ENUM_OTA_STS_BEGIN;
+	wifi_connect();
 
+	gulOTAsts = ENUM_OTA_STS_BEGIN;
+	gulRunning = 1;
     ESP_LOGI(TAG, "Starting Advanced OTA example [%d]!!", gulOTAsts);
+    if(!strlen(frimwareURL))
+    {
+    	memcpy(frimwareURL, CONFIG_EXAMPLE_FIRMWARE_UPGRADE_URL, strlen(CONFIG_EXAMPLE_FIRMWARE_UPGRADE_URL));
+    	ESP_LOGW(TAG, "Firmware http is Null,set default val %s!!", CONFIG_EXAMPLE_FIRMWARE_UPGRADE_URL);
+    }
     printf("Firmware url: %s\r\n", frimwareURL); //CONFIG_EXAMPLE_FIRMWARE_UPGRADE_URL
     esp_err_t ota_finish_err = ESP_OK;
     esp_http_client_config_t config = {
@@ -904,6 +926,7 @@ void advanced_ota_example_task(void *pvParameter)
 
     if (err != ESP_OK) {
     	gulOTAsts = ENUM_OTA_STS_NO_RUNNING;
+    	gulRunning = 0;
         ESP_LOGE(TAG, "ESP HTTPS OTA Begin failed, reset the ota thread sts:%d", gulOTAsts);
         vTaskDelete(NULL);
         return;
@@ -965,6 +988,7 @@ void advanced_ota_example_task(void *pvParameter)
 ota_end:
     esp_https_ota_abort(https_ota_handle);
     gulOTAsts = ENUM_OTA_STS_NO_RUNNING;
+    gulRunning = 0;
     ESP_LOGE(TAG, "ESP_HTTPS_OTA upgrade failed, %d", gulOTAsts);
     vTaskDelete(NULL);
 
@@ -976,9 +1000,7 @@ int sys_ota(int reboot)
 {
 	printf("sys ota\r\n");
 
-	wifi_connect();
-
-	if(!gulOTAsts)
+	if(!gulRunning)
 	{
 		xTaskCreate(&advanced_ota_example_task, "advanced_ota_example_task", 1024 * 8, NULL, 5, NULL);
 	}
@@ -988,7 +1010,7 @@ int sys_ota(int reboot)
 	}
 
 
-	return gulOTAsts;
+	return gulRunning;
 }
 
 int sys_ota_set_url(char *strurl)
@@ -1039,7 +1061,7 @@ int wifi_set_user_pwd(char *struser, char *strpwd)
 		return -1;
 	}
 
-	memcpy(gstrssid, struser, WIFI_LEN);
+	memcpy(gstrssid, struser, SSID_LEN);
 	memcpy(gstrpwd, strpwd, WIFI_LEN);
 	return 0;
 }
