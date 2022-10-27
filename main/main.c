@@ -27,11 +27,11 @@ void app_main(void)
 
     //prop_init();
 
-    //power_init();
-
     //net_init();
 
     message_init();
+
+    //power_init();
     locater_uart_init();
 
     while(1)

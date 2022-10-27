@@ -95,12 +95,15 @@ static const char *TAG = "i2c-simple-example";
 #define GPIO_OUTPUT_LED_0    15//Red
 #define GPIO_OUTPUT_LED_1    14//Yellow
 #define GPIO_OUTPUT_WAKEUP_4G    13//esp32 wake up 4g
+
+#define GPIO_TEST0 0
+#define GPIO_TEST1 1
 #if 0
 #define GPIO_OUTPUT_PIN_SEL  ((1ULL<<GPIO_OUTPUT_UART_CAT1_EN) | (1ULL<<GPIO_OUTPUT_UART_CAT1_POWER) \
 			|(1ULL<<GPIO_OUTPUT_LED_0) |(1ULL<<GPIO_OUTPUT_LED_1))
 #else
 #define GPIO_OUTPUT_PIN_SEL  ((1ULL<<GPIO_OUTPUT_UART_CAT1_EN) | (1ULL<<GPIO_OUTPUT_UART_CAT1_POWER) \
-		|(1ULL<<GPIO_OUTPUT_WAKEUP_4G))
+		|(1ULL<<GPIO_OUTPUT_WAKEUP_4G) |(1ULL<<GPIO_TEST0) |(1ULL<<GPIO_TEST1))
 #endif
 #define GPIO_OUTPUT_PIN_SEL1  ((1ULL<<GPIO_OUTPUT_LED_0) |(1ULL<<GPIO_OUTPUT_LED_1) | (1ULL<<GPIO_OUTPUT_UART_CAT1_POWER))
 #define GPIO_OUTPUT_PIN_SEL2  ((1ULL<<GPIO_OUTPUT_UART_CAT1_EN))
@@ -747,8 +750,31 @@ int hardware_leds_ctl(int ledidx, int onoff)
 
 int hardware_battery_get_cap()
 {
-	int slcap = get_channel(0)*100/255;
-	printf("channel data is %x\r\n", slcap);
+	int slcap = 0;
+	int slcap_adc = get_channel(0);
+	if(slcap_adc <= 0xbab)
+		slcap = 100;
+	else if(slcap_adc > 0xbab)
+		slcap = 99;
+	else if(slcap_adc > 0xb67)
+		slcap = 88;
+	else if(slcap_adc > 0xb1c)
+		slcap = 77;
+	else if(slcap_adc > 0xad8)
+		slcap = 66;
+	else if(slcap_adc > 0xa48)
+		slcap = 55;
+	else if(slcap_adc > 0x9fc)
+		slcap = 44;
+	else if(slcap_adc > 0x9b8)
+		slcap = 33;
+	else if(slcap_adc > 0x96d)
+		slcap = 22;
+	else if(slcap_adc > 0x91e)
+		slcap = 11;
+	else
+		slcap = 1;
+	printf("channel data is %x, cap %d\r\n", slcap_adc, slcap);
 	return slcap;
 }
 

@@ -2,6 +2,7 @@
 #include "../common/common.h"
 static void *example_thread(void * arg);
 
+extern void lis2dw12_activity(void);
 /*
  *
 broker.emqx.io
@@ -53,7 +54,7 @@ void wifi_sts_thread()
 		{
 			ulWifiThread = 1;
 			printf("[%20s]%d\r\n", "OTA STS", sys_ota_sts_get());
-			vTaskDelay(1000 / portTICK_PERIOD_MS);
+			vTaskDelay(5000 / portTICK_PERIOD_MS);
 
 			if(ENUM_OTA_STS_EARSE_FINISH == sys_ota_sts_get())
 			{
@@ -145,9 +146,11 @@ void message_handle()
 			//messsage_location_report();//7 message
 			break;
 		case 8:
+			lis2dw12_activity();
 			//messsage_devices_record_report();//8 message
 			break;
 		case 9:
+			power_init();
 			//messsage_app_account_set();//9 message
 			break;
 		case 10:
