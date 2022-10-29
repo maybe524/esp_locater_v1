@@ -19,6 +19,9 @@
 #include "freertos/queue.h"
 #include "driver/gpio.h"
 */
+
+//i2c
+#include "driver/i2c.h"
 /*external function*/
 inline void common_init(){ printf("common_init\r\n"); }
 void hareware_main(void);
