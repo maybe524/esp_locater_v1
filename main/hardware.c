@@ -717,7 +717,7 @@ void hareware_main()
 	gpio_init();//gpio2 3 13 8 9
 	uart_4g_init();//gpio15 10,uart 14 12
 	uart_4g_main();
-	//i2c_init();//gpio 18,19
+	i2c_master_init();//gpio 18,19
 
     pthread_attr_t attr;
     pthread_t thread1, thread2;

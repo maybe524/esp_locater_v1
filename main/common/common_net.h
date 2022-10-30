@@ -39,6 +39,7 @@ STRU_WIFI_INFO stWifi[12];
 void nvs_init();
 int wifi_init();
 int wifi_connect();
+int wifi_disconnect();
 int wifi_scan();
 int wifi_set_user_pwd(char *struser, char *strpwd);
 int sys_ota();

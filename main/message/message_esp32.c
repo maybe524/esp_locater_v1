@@ -106,7 +106,6 @@ void message_handle()
 
 			break;
 		case 2:
-#if 1
 			wifi_init();
 			wifi_scan();
 			ulapcnt = wifi_get_info(&pstWifiInfo);
@@ -117,7 +116,6 @@ void message_handle()
 				printf("MAC:%s\r\n", pstWifiInfo[ulIdx].mac);
 				printf("RSSI:%d\r\n", pstWifiInfo[ulIdx].rssi);
 			}
-#endif
 			//message_alarm_report(); //6 message
 			break;
 		case 3:
@@ -156,16 +154,26 @@ void message_handle()
 		case 10:
 			wifi_init();
 			wifi_connect();
-			sys_ota();
+			wifi_disconnect();
+			wifi_scan();
+			//sys_ota();
 			//messsage_wifi_location_report_continus();//10 message
 			break;
 		case 11:
+		    xTaskCreate(&wifi_sts_thread, "wifi_sts_thread", 1024 * 8, NULL, 5, NULL);
 			//messsage_device_update();//11 message
 			break;
 		case 12:
+			wifi_init();
+			wifi_scan();
+			sys_ota();
 			//messsage_device_hardware_data_report();//12 message
 			break;
 		case 13:
+			wifi_init();
+			wifi_scan();
+			wifi_connect();
+			wifi_disconnect();
 			//messsage_device_data_report();//13 message
 			break;
 		case 14:
@@ -205,6 +213,7 @@ void message_handle()
 			//messsage_temp_report_set();//20 message
 			break;
 		case 21:
+
 			//messsage_battery_set();//21 message
 			break;
 		case 22:

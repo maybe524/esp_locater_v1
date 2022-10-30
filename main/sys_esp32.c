@@ -29,7 +29,9 @@ unsigned int gulWifiConnect = 0;
 unsigned int gulRunning = 0;
 unsigned int gulOTAReboot = 0;
 unsigned int gulOTAsts = 0;
-
+unsigned int gulWifiInit = 0;
+unsigned int gulWifiInitScan = 0;
+unsigned int gulWifiInitConnect = 0;
 
 //connect
 #define CONFIG_EXAMPLE_CONNECT_WIFI   1
@@ -57,6 +59,11 @@ uint8_t server_cert_pem_end[] asm("_binary_ca_cert_pem_end");
 #define FIRMWARE_URL_LEN 320
 char frimwareURL[FIRMWARE_URL_LEN];
 
+#if 0
+#ifdef ESP_ERROR_CHECK
+#undef ESP_ERROR_CHECK
+#endif
+#endif
 /* Common functions for protocol examples, to establish Wi-Fi or Ethernet connection.
 
    This example code is in the Public Domain (or CC0 licensed, at your option.)
@@ -137,6 +144,8 @@ static const char *s_ipv6_addr_types[] = {
 };
 #endif
 
+static void start(void);
+static void stop(void);
 #if CONFIG_EXAMPLE_CONNECT_WIFI
 static esp_netif_t *wifi_start(void);
 static void wifi_stop(void);
@@ -304,11 +313,15 @@ void nvs_init()
 
 int wifi_init()
 {
-	static unsigned int gulWifiInit = 0;
 	if(!gulWifiInit)
 	{
 		ESP_ERROR_CHECK(esp_netif_init());
     	ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+		wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+		ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+		ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+
     	gulWifiInit = 1;
     	ESP_LOGI(TAG, "Wifi Module Init!");
 	}
@@ -319,79 +332,122 @@ int wifi_init()
 
     return 0;
 }
-char strWifiMac[DEFAULT_SCAN_LIST_SIZE][32] = {0};
-/* Initialize Wi-Fi as sta and set scan method */
-int wifi_scan()
+
+#if 0
+int wifi_init_inner(int ulScan, int ulConnect)
 {
-	printf("Wifi Scan \r\n");
-	static esp_netif_t *sta_netif = NULL;
-    if(!sta_netif)
-    {
-    	sta_netif = esp_netif_create_default_wifi_sta();
-    	assert(sta_netif);
-    }
-	if(!gulWifiConnect)
+	gulWifiInitScan = ulScan;
+	gulWifiInitConnect = ulConnect;
+	if(!gulWifiInitScan || !gulWifiInitConnect)
 	{
 		wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
 		ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 		gulWifiConnect = 1;
 		ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
 		ESP_ERROR_CHECK(esp_wifi_start());
+
+    	ESP_LOGI(TAG, "Wifi Module Init!Use num %d", gulWifiInit);
 	}
+	return 0;
+
+}
+
+int wifi_deinit_inner()
+{
+	if(gulWifiInit == 1)
+	{
+	    esp_err_t err = esp_wifi_stop();
+	    if (err == ESP_ERR_WIFI_NOT_INIT) {
+	        return;
+	    }
+	    ESP_ERROR_CHECK(err);
+	    ESP_ERROR_CHECK(esp_wifi_deinit());
+	}
+	else
+	{
+		ESP_LOGI(TAG, "Wifi Module No Use num %d", gulWifiInit);
+	}
+
+    return 0;
+}
+#endif
+
+char strWifiMac[DEFAULT_SCAN_LIST_SIZE][32] = {0};
+/* Initialize Wi-Fi as sta and set scan method */
+int wifi_scan()
+{
+	printf("Wifi Scan \r\n");
+#if 0
+	static esp_netif_t *sta_netif = NULL;
+    if(!sta_netif)
+    {
+    	sta_netif = esp_netif_create_default_wifi_sta();
+    	assert(sta_netif);
+    }
+#endif
+    //start();
+#if 0
+	if(!gulWifiConnect)
+	{
+		ESP_ERROR_CHECK(esp_wifi_start());
+		gulWifiConnect = 1;
+	}
+#endif
     uint16_t number = DEFAULT_SCAN_LIST_SIZE;
     wifi_ap_record_t ap_info[DEFAULT_SCAN_LIST_SIZE];
     uint16_t ap_count = 0;
     memset(ap_info, 0, sizeof(ap_info));
 
+    ESP_ERROR_CHECK(esp_wifi_start());
+
     esp_wifi_scan_start(NULL, true);
     ESP_ERROR_CHECK(esp_wifi_scan_get_ap_records(&number, ap_info));//error
     ESP_ERROR_CHECK(esp_wifi_scan_get_ap_num(&ap_count));
     ESP_ERROR_CHECK(esp_wifi_scan_stop());
-//    while(1)
-//    {
-		ESP_LOGD(TAG, "Total APs scanned = %u", ap_count);
-		if(ap_count >= DEFAULT_SCAN_LIST_SIZE)
-			gulWifiApcnt = DEFAULT_SCAN_LIST_SIZE;
-		else
-			gulWifiApcnt = ap_count;
-		for (int i = 0; i < gulWifiApcnt; i++) {
-			//memcpy(&stWifi[i].ssid, ap_info[i].ssid, strlen(&ap_info[i].ssid[0]));
-			strcpy((char *)&stWifi[i].ssid[0], (char *)&ap_info[i].ssid[0]);
-			stWifi[i].rssi = ap_info[i].rssi;
+
+    ESP_ERROR_CHECK(esp_wifi_stop());
+
+	ESP_LOGD(TAG, "Total APs scanned = %u", ap_count);
+	if(ap_count >= DEFAULT_SCAN_LIST_SIZE)
+		gulWifiApcnt = DEFAULT_SCAN_LIST_SIZE;
+	else
+		gulWifiApcnt = ap_count;
+	for (int i = 0; i < gulWifiApcnt; i++) {
+		//memcpy(&stWifi[i].ssid, ap_info[i].ssid, strlen(&ap_info[i].ssid[0]));
+		strcpy((char *)&stWifi[i].ssid[0], (char *)&ap_info[i].ssid[0]);
+		stWifi[i].rssi = ap_info[i].rssi;
 #if 0
-			printf("%x:%x:%x:%x:%x:%x\r\n",
-				ap_info[i].bssid[0],
-				ap_info[i].bssid[1],
-				ap_info[i].bssid[2],
-				ap_info[i].bssid[3],
-				ap_info[i].bssid[4],
-				ap_info[i].bssid[5]);
+		printf("%x:%x:%x:%x:%x:%x\r\n",
+			ap_info[i].bssid[0],
+			ap_info[i].bssid[1],
+			ap_info[i].bssid[2],
+			ap_info[i].bssid[3],
+			ap_info[i].bssid[4],
+			ap_info[i].bssid[5]);
 #else
-			sprintf(stWifi[i].mac, "%x%x%x%x%x%x\0",
-				ap_info[i].bssid[0],
-				ap_info[i].bssid[1],
-				ap_info[i].bssid[2],
-				ap_info[i].bssid[3],
-				ap_info[i].bssid[4],
-				ap_info[i].bssid[5]);
+		sprintf(stWifi[i].mac, "%x%x%x%x%x%x\0",
+			ap_info[i].bssid[0],
+			ap_info[i].bssid[1],
+			ap_info[i].bssid[2],
+			ap_info[i].bssid[3],
+			ap_info[i].bssid[4],
+			ap_info[i].bssid[5]);
 
 #endif
-			//memcpy(stWifi[i].bssid, ap_info[i].bssid, 6);
+		//memcpy(stWifi[i].bssid, ap_info[i].bssid, 6);
 
-			ESP_LOGD(TAG, "SSID \t\t%s", ap_info[i].ssid);
-			ESP_LOGD(TAG, "BSSID \t\t%s", stWifi[i].mac);
-			ESP_LOGD(TAG, "RSSI \t\t%d", ap_info[i].rssi);
+		ESP_LOGD(TAG, "SSID \t\t%s", ap_info[i].ssid);
+		ESP_LOGD(TAG, "BSSID \t\t%s", stWifi[i].mac);
+		ESP_LOGD(TAG, "RSSI \t\t%d", ap_info[i].rssi);
 
-			print_auth_mode(ap_info[i].authmode);
-			if (ap_info[i].authmode != WIFI_AUTH_WEP) {
-				//print_cipher_type(ap_info[i].pairwise_cipher, ap_info[i].group_cipher);
-			}
-			ESP_LOGD(TAG, "Channel \t\t%d\n", ap_info[i].primary);
-			ESP_LOGD(TAG, "stWifi RSSI: %d\n", stWifi[i].rssi);
+		print_auth_mode(ap_info[i].authmode);
+		if (ap_info[i].authmode != WIFI_AUTH_WEP) {
+			//print_cipher_type(ap_info[i].pairwise_cipher, ap_info[i].group_cipher);
 		}
-//		vTaskDelay(5000 / portTICK_PERIOD_MS);
-//    }
-
+		ESP_LOGD(TAG, "Channel \t\t%d\n", ap_info[i].primary);
+		ESP_LOGD(TAG, "stWifi RSSI: %d\n", stWifi[i].rssi);
+	}
+#if 0
 //    esp_err_t err = esp_wifi_stop();
 //    if (err == ESP_ERR_WIFI_NOT_INIT) {
 //        return;
@@ -403,6 +459,8 @@ int wifi_scan()
 		//ESP_ERROR_CHECK(esp_wifi_clear_default_wifi_driver_and_handlers(sta_netif));
 		//esp_netif_destroy(sta_netif);
 	}
+#endif
+	//stop();
 	return 0;
 }
 
@@ -425,7 +483,7 @@ void wifi_scan_stop(void)
     esp_netif_destroy(wifi_netif);
     s_example_esp_netif = NULL;
 }
-
+#if 0
 int wifi_connect()
 {
 	//ESP_ERROR_CHECK(esp_netif_init());
@@ -459,6 +517,28 @@ int wifi_connect()
 
 	}
 #endif
+	return 0;
+}
+#else
+int wifi_connect()
+{
+	//ESP_ERROR_CHECK(esp_netif_init());
+	//ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+	/* This helper function configures Wi-Fi or Ethernet, as selected in menuconfig.
+	 * Read "Establishing Wi-Fi or Ethernet Connection" section in
+	 * examples/protocols/README.md for more information about this function.
+	*/
+	//ESP_ERROR_CHECK(example_connect());
+	printf("Wifi Connect result %d\r\n", example_connect());
+
+	return 0;
+}
+#endif
+
+int wifi_disconnect()
+{
+	printf("Wifi Connect result %d\r\n", example_disconnect());
 	return 0;
 }
 
@@ -572,7 +652,6 @@ static bool is_our_netif(const char *prefix, esp_netif_t *netif)
 /* set up connection, Wi-Fi and/or Ethernet */
 static void start(void)
 {
-
 #if CONFIG_EXAMPLE_CONNECT_WIFI
     s_example_esp_netif = wifi_start();
     s_active_interfaces++;
@@ -656,7 +735,7 @@ esp_err_t example_connect(void)
 #endif
 
     start();//
-
+    esp_wifi_connect();
     ESP_ERROR_CHECK(esp_register_shutdown_handler(&stop));
     ESP_LOGI(TAG, "Waiting for IP(s)");
     for (int i = 0; i < NR_OF_IP_ADDRESSES_TO_WAIT_FOR; ++i) {
@@ -719,7 +798,7 @@ static void on_wifi_connect(void *esp_netif, esp_event_base_t event_base,
 }
 
 #endif // CONFIG_EXAMPLE_CONNECT_IPV6
-
+#if 0
 static esp_netif_t *wifi_start(void)
 {
 
@@ -783,7 +862,74 @@ static esp_netif_t *wifi_start(void)
     esp_wifi_connect();
     return netif;
 }
+#else
+static esp_netif_t *wifi_start(void)
+{
+    char *desc;
+#if 0
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+#endif
+    esp_netif_inherent_config_t esp_netif_config = ESP_NETIF_INHERENT_DEFAULT_WIFI_STA();
+    // Prefix the interface description with the module TAG
+    // Warning: the interface desc is used in tests to capture actual connection details (IP, gw, mask)
+    asprintf(&desc, "%s: %s", TAG, esp_netif_config.if_desc);
+    esp_netif_config.if_desc = desc;
+    esp_netif_config.route_prio = 128;
+    esp_netif_t *netif = esp_netif_create_wifi(WIFI_IF_STA, &esp_netif_config);
+    free(desc);
+    esp_wifi_set_default_wifi_sta_handlers();
 
+    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &on_wifi_disconnect, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &on_got_ip, NULL));
+#ifdef CONFIG_EXAMPLE_CONNECT_IPV6
+    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_CONNECTED, &on_wifi_connect, netif));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_GOT_IP6, &on_got_ipv6, NULL));
+#endif
+
+    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
+#if 1
+    wifi_config_t wifi_config;
+    memset(&wifi_config, 0, sizeof(wifi_config_t));
+    if(strlen(gstrssid))
+    	memcpy(wifi_config.sta.ssid,  gstrssid, SSID_LEN);
+    else
+    {
+    	memcpy(wifi_config.sta.ssid,  CONFIG_EXAMPLE_WIFI_SSID, strlen(CONFIG_EXAMPLE_WIFI_SSID));
+    	ESP_LOGW(TAG, "Set dafault ssid %s", wifi_config.sta.ssid);
+    }
+
+    if(strlen(gstrssid))
+    	 memcpy(wifi_config.sta.password,  gstrpwd, WIFI_LEN);
+    else
+    {
+    	memcpy(wifi_config.sta.password,  CONFIG_EXAMPLE_WIFI_PASSWORD, strlen(CONFIG_EXAMPLE_WIFI_PASSWORD));
+    	ESP_LOGW(TAG, "Set dafault pwd %s", wifi_config.sta.password);
+    }
+
+#else
+    wifi_config_t wifi_config = {
+        .sta = {
+            .ssid = CONFIG_EXAMPLE_WIFI_SSID,
+            .password = CONFIG_EXAMPLE_WIFI_PASSWORD,
+            //.scan_method = EXAMPLE_WIFI_SCAN_METHOD,
+            //.sort_method = EXAMPLE_WIFI_CONNECT_AP_SORT_METHOD,
+            //.threshold.rssi = CONFIG_EXAMPLE_WIFI_SCAN_RSSI_THRESHOLD,
+            //.threshold.authmode = EXAMPLE_WIFI_SCAN_AUTH_MODE_THRESHOLD,
+        },
+    };
+#endif
+
+    ESP_LOGI(TAG, "Connecting to %s...%s", wifi_config.sta.ssid, wifi_config.sta.password);
+
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
+
+    return netif;
+}
+#endif
+#if 0
 static void wifi_stop(void)
 {
     esp_netif_t *wifi_netif = get_example_netif_from_desc("sta");
@@ -803,9 +949,27 @@ static void wifi_stop(void)
     esp_netif_destroy(wifi_netif);
     s_example_esp_netif = NULL;
 }
+
+#else
+static void wifi_stop(void)
+{
+    esp_netif_t *wifi_netif = get_example_netif_from_desc("sta");
+    ESP_ERROR_CHECK(esp_event_handler_unregister(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &on_wifi_disconnect));
+    ESP_ERROR_CHECK(esp_event_handler_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, &on_got_ip));
+#ifdef CONFIG_EXAMPLE_CONNECT_IPV6
+    ESP_ERROR_CHECK(esp_event_handler_unregister(IP_EVENT, IP_EVENT_GOT_IP6, &on_got_ipv6));
+    ESP_ERROR_CHECK(esp_event_handler_unregister(WIFI_EVENT, WIFI_EVENT_STA_CONNECTED, &on_wifi_connect));
+#endif
+    ESP_ERROR_CHECK(esp_wifi_clear_default_wifi_driver_and_handlers(wifi_netif));
+    esp_netif_destroy(wifi_netif);
+    s_example_esp_netif = NULL;
+
+	esp_err_t err = esp_wifi_stop();
+	ESP_ERROR_CHECK(err);
+//	ESP_ERROR_CHECK(esp_wifi_deinit());
+}
+#endif
 #endif // CONFIG_EXAMPLE_CONNECT_WIFI
-
-
 esp_netif_t *get_example_netif(void)
 {
     return s_example_esp_netif;
@@ -928,6 +1092,7 @@ void advanced_ota_example_task(void *pvParameter)
     	gulOTAsts = ENUM_OTA_STS_NO_RUNNING;
     	gulRunning = 0;
         ESP_LOGE(TAG, "ESP HTTPS OTA Begin failed, reset the ota thread sts:%d", gulOTAsts);
+        wifi_disconnect();
         vTaskDelete(NULL);
         return;
     }
@@ -986,6 +1151,7 @@ void advanced_ota_example_task(void *pvParameter)
     }
 
 ota_end:
+	wifi_disconnect();
     esp_https_ota_abort(https_ota_handle);
     gulOTAsts = ENUM_OTA_STS_NO_RUNNING;
     gulRunning = 0;
