@@ -156,6 +156,7 @@ void message_handle()
 			wifi_connect();
 			wifi_disconnect();
 			wifi_scan();
+			//   xTaskCreate(&wifi_sts_thread, "wifi_sts_thread", 1024 * 8, NULL, 5, NULL);
 			//sys_ota();
 			//messsage_wifi_location_report_continus();//10 message
 			break;
@@ -271,5 +272,5 @@ void message_init()
     }
 #endif
     xTaskCreate(&message_handle, "message_handle", 1024 * 8, NULL, 5, NULL);
-    xTaskCreate(&wifi_sts_thread, "wifi_sts_thread", 1024 * 8, NULL, 5, NULL);
+
 }
