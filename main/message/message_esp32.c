@@ -7,7 +7,7 @@ extern void lis2dw12_activity(void);
  *
 broker.emqx.io
  *
- * ABCABCABC¡¡XYZXYZXYZ¡¡QAZWSXQAZ
+ * ABCABCABCï¿½ï¿½XYZXYZXYZï¿½ï¿½QAZWSXQAZ
  *
  * int SERIAL_LENGTH = 9;
     char[] CODE_SERIAL = {
@@ -86,7 +86,7 @@ void message_handle()
 	{
 		int slRecv = message_recv();
 		//printf("recv %d message\r\n", slRecv);
-		printf("*****[tese case%d]*****\r\n", slRecv);
+		// printf("*****[tese case%d]*****\r\n", slRecv);
 
 		switch(slRecv)
 		{

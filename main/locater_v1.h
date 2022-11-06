@@ -35,6 +35,7 @@ typedef struct locater_atres_csq_fmt_s {
 
 typedef struct locater_str_split_fmt_s {
     char data[LOCATER_MAX_AT_RESP_LEN];
+    unsigned int data_len;
 } locater_str_split_fmt_t;
 
 typedef struct locater_atres_creg_fmt_s {
@@ -94,5 +95,52 @@ typedef struct locater_atres_cpsi_fmt_s {
     unsigned int c1;
     unsigned int c2;
 } locater_atres_cpsi_fmt_t;
+
+#define LOCATER_ENCLOSURE_CNF_NAME_LEN  256
+
+typedef struct locater_enclosure_conf_ext_fmt_s {
+    union {
+        char byte[27];
+    
+        struct {
+            // 1 字节围栏开关（0=不启用，1=启用）
+            char is_enable;
+            // 1 字节围栏精准/标准设置（0=标准，1=精准）
+            char accurate;
+            // 2 字节开始时间分钟
+            short start_time;
+            short stop_time;
+            // 1 字节围栏类型，1=出栏报警，2=入栏报警，3=跨栏报警
+            char type;
+            // 4 字节围栏中心维度值，为角度值分*10^5;
+            unsigned int center_dimension_value;
+            // 4 字节围栏中心经度值，为角度值分*10^5，如 30.30º=（30*60+30）*100000=183000000
+            unsigned int center_longitude_value;
+            // 8 字节围栏半径比较值 S, 如果(△Lat^2*Factor_T + △Lon^2*10^6)>S,表示为围栏外面，反之，表示在围栏里面
+            unsigned long long comparative_value;
+        };
+    };
+} locater_enclosure_conf_ext_fmt_t;
+
+typedef struct locater_enclosure_conf_fmt_s {
+    char name[LOCATER_ENCLOSURE_CNF_NAME_LEN];
+    char idx;
+    struct locater_enclosure_conf_ext_fmt_s ext;
+} locater_enclosure_conf_fmt_t;
+
+typedef struct locater_location_utc_info_fmt_s {
+    unsigned short hh;
+    unsigned short mm;
+    unsigned short ss_high;
+    unsigned char resver;
+    unsigned short ss_low;
+} locater_location_utc_info_fmt_t;
+
+typedef struct locater_location_info_fmt_s {
+    unsigned int time_stamp;
+    unsigned int latitude;
+    unsigned int longitude;
+} locater_location_info_fmt_t;
+
 
 int locater_uart_init(void);
