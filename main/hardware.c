@@ -133,7 +133,7 @@ static const char *TAG = "i2c-simple-example";
 #define v_task_delay  vTaskDelay
 
 static xQueueHandle gpio_evt_queue = NULL;
-static char s_locater_uart_recv_buff[256] = {0};
+static char s_locater_uart_recv_buff[1024] = {0};
 static unsigned int s_locater_uart_recv_count = 0;
 static pthread_mutex_t s_locater_uart_data_mutex;
 static bool s_is_locater_uart_recv_ready = false;
@@ -422,7 +422,7 @@ static void uart_rx_task(void *arg)
             *  如果是一个完整的句子，那么在处理，否则继续等待。
             *  如果是一个消息，那么把消息提取出来。并且把消息移除掉。
             */
-            printf("uart_rx_task, locater_uart_recv_count: %d\n", s_locater_uart_recv_count);
+            printf("uart_rx_task, uart_recv_count: %04d (+%04d)\n", s_locater_uart_recv_count, rx_final);
 
             if (s_locater_uart_debug_mode) {
                 printf("uart_rx_task, recv_buff:\n");
@@ -453,10 +453,6 @@ uart_rx_task_retry_get_one_event:
                     if (!p_first_one)
                         p_first_one = p_match_one;
 
-                    printf("uart_rx_task, event_%04d start\n", process_idx);
-                    printf("uart_rx_task, event_%04d content: %s\n", process_idx, p_match_one);
-                    printf("uart_rx_task, event_%04d end\n", process_idx);
-
                     // 把事件提取出来
                     j = 0;
                     memset(event_buff, 0, sizeof(event_buff));
@@ -479,9 +475,15 @@ uart_rx_task_retry_get_one_event:
                     // 记录事件的总长度等，方便后续从接收buff中减去这些消息
                     curr_event_len = p_get_one - p_match_one;
                     all_event_len += curr_event_len;
-                    printf("uart_rx_task, event_%04d, curr_event_len: %d, all_event_len: %d\n", \
+                    printf("uart_rx_task, event_%04d curr_event_len: %d, all_event_len: %d\n", \
                         process_idx, curr_event_len, all_event_len);
-                    
+
+#if 1 //def LOCATOR_DEBUG_MODE
+                    printf("uart_rx_task, event_%04d dump start\n", process_idx);
+                    ESP_LOG_BUFFER_HEXDUMP(RX_TASK_TAG, p_match_one, curr_event_len, ESP_LOG_INFO);
+                    printf("uart_rx_task, event_%04d dump done!\n", process_idx);
+#endif
+
                     // 事件入队
                     uart_event_put_item(event_buff);
                     process_idx++;

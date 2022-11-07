@@ -72,4 +72,11 @@ typedef struct locator_uart_protocol_app_set_user_setting_payload_fmt_s {
     char reserv2[4];
 } locator_uart_protocol_app_set_user_setting_payload_fmt_t;
 
+typedef struct locator_uart_protocol_dev_upload_location_mult_payload_fmt_s {
+    char type;
+    unsigned int time_stamp;
+    unsigned int latitude;
+    unsigned int longitude;
+} locator_uart_protocol_dev_upload_location_mult_payload_fmt_t;
+
 #pragma pack ()

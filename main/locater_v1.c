@@ -67,6 +67,51 @@ static void locater_marks_flags_32(unsigned int *p_flags, unsigned int mask)
     (*p_flags) |= mask;
 }
 
+
+#define CODE_BASE (86)
+#define INT_LENGTH (5)
+
+static char CODE_86[86] = {
+    '%', '"', '!', '&', ',', '(', ')', '`', '-', '.',
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
+    ':', ';', '<', '=', '>', '?', '@', 'A', 'B', 'C',
+    'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
+    'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W',
+    'X', 'Y', 'Z', '[', ']', '^', 'a', 'b', 'c', 'd',
+    'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n',
+    'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x',
+    'y', 'z', '{', '|', '}', '~'
+};
+
+static char *locater_int_to_code86(int my_int, char *int_string)
+{
+    int the_rest = my_int;
+
+    int position = 0;
+    for (int i = 0; i < INT_LENGTH; i++) {
+        int_string[position] = CODE_86[the_rest % CODE_BASE];
+        the_rest = the_rest / CODE_BASE;
+        position++;
+
+    }
+    return int_string;
+}
+
+//*code的前5个字符必须是CODE_86字符；
+static int locater_code86_to_int(const char *code)
+{
+    int my_int = 0;
+    for (int i = INT_LENGTH - 1; i > -1; i--) {
+        for (int k = 0; k < CODE_BASE; k++) {
+            if (code[i] == CODE_86[k]) {
+                my_int = my_int * CODE_BASE + k;
+                break;
+            }
+        }
+    }
+    return my_int;
+}
+
 /**
  * @brief 截取字符串
  * 
@@ -2736,7 +2781,7 @@ static int locater_uart_get_location_info(struct locater_location_info_fmt_s *p_
     lat_dd = atoi(buff);
     sprintf(buff, "%d%d", p_latitude[2], p_latitude[3]);
     lat_mm_h = atoi(buff);
-    sprintf(buff, "%d%d%d%d", p_latitude[4], p_latitude[5], p_latitude[6], p_latitude[7]);
+    sprintf(buff, "%d%d%d%d", p_latitude[5], p_latitude[6], p_latitude[7], p_latitude[8]);
     lat_mm_l = atoi(buff);
     p_location_info->latitude = lat_dd + lat_mm_h + lat_mm_l * 100000;
     printf("locate_info, get p_latitude: %s, 0x%08x\n", p_latitude, p_location_info->latitude);
@@ -2746,9 +2791,9 @@ static int locater_uart_get_location_info(struct locater_location_info_fmt_s *p_
     lon_dd = atoi(buff);
     sprintf(buff, "%d%d", p_longitude[2], p_longitude[3]);
     lon_mm_h = atoi(buff);
-    sprintf(buff, "%d%d%d%d", p_longitude[4], p_longitude[5], p_longitude[6], p_longitude[7]);
+    sprintf(buff, "%d%d%d%d", p_longitude[5], p_longitude[6], p_longitude[7], p_longitude[8]);
     lon_mm_l = atoi(buff);
-    p_location_info->latitude = lon_dd + lon_mm_h + lon_mm_l * 100000;
+    p_location_info->longitude = lon_dd + lon_mm_h + lon_mm_l * 100000;
     printf("locate_info, get p_longitude: %s, 0x%08x\n", p_longitude, p_location_info->longitude);
 
     printf("locate_info, get p_hdop: %s\n", p_hdop);
@@ -2852,6 +2897,7 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(1) {
 
 LOCATOR_UART_FSM_COM_STEP_ENTRY(5) {
         struct locater_location_info_fmt_s location_info = {0};
+        struct locator_uart_protocol_dev_upload_location_mult_payload_fmt_s location_mult = {0};
 
         printf("app_once_positioning, detect device continuous positioning\n");
         if (!is_locator_init) {
@@ -2862,14 +2908,26 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(5) {
         else if (curr_app_idx != s_locater_uart_curr_app_idx) {
             printf("app_once_positioning, detect app idx is update\n");
             s_is_locater_uart_continuous_positioning = false;
+            locater_uart_set_location_exit();
             step = 0;
             continue;
         }
 
         memset(&location_info, 0, sizeof(location_info));
         ret = locater_uart_get_location_info(&location_info);
+        if (ret < 0) {
+            v_task_delay(5000 / port_tick_period_ms);
+            continue;
+        }
+
+        location_mult.type = 1;
+        location_mult.time_stamp = location_info.time_stamp;
+        location_mult.latitude = location_info.latitude;
+        location_mult.longitude = location_info.longitude;
+        sprintf(mqtt_topic_str_buf, "%sD/0/B", p_serial);
+        locater_uart_set_mqtt_pub(client_handle, mqtt_topic_str_buf, (char *)&location_mult, qos, remain, 0);
+        printf("app_once_positioning, upload once positioning done\n");
         printf("\n\n");
-        // locater_uart_set_location_exit();
         v_task_delay(5000 / port_tick_period_ms);
         continue;
       }
