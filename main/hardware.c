@@ -144,7 +144,7 @@ static struct uart_event_que_s s_uart_event_que[UART_EVENT_QUE_DETH] = {0};
 static unsigned int s_uart_event_que_busy_count = 0;
 static unsigned int s_uart_event_que_head_idx = 0, s_uart_event_que_tail_idx = 0;
 static pthread_mutex_t s_uart_event_mutex;
-static unsigned int s_locater_uart_debug_mode = 0;
+static unsigned int s_locater_uart_debug_mode = 1;
 
 static struct uart_event_str_s s_uart_event_str_array[] = {
     {.p_event_str = "+QMTRECV:"},   ///< 服务器下发的消息
@@ -426,9 +426,7 @@ static void uart_rx_task(void *arg)
 
             if (s_locater_uart_debug_mode) {
                 printf("uart_rx_task, recv_buff:\n");
-                printf("/*********************\n");
-                printf("%s\n", s_locater_uart_recv_buff);
-                printf("*********************/\n");
+                ESP_LOG_BUFFER_HEXDUMP(RX_TASK_TAG, s_locater_uart_recv_buff, s_locater_uart_recv_count, ESP_LOG_INFO);
             }
 
             all_event_len = 0;
@@ -437,7 +435,18 @@ static void uart_rx_task(void *arg)
             p_first_one = NULL;
             p_get_one = s_locater_uart_recv_buff;
 
-            if (s_locater_uart_recv_count >= 2 && \
+            if (s_locater_uart_recv_count == 2 && \
+                    s_locater_uart_recv_buff[s_locater_uart_recv_count - 1] == '\n' && \
+                    s_locater_uart_recv_buff[s_locater_uart_recv_count - 2] == '\r')
+            {
+                /*
+                *  解决接收缓存刚开始的两字节出现挥着换行符。
+                *  处理方法是直接去掉。
+                */
+                s_locater_uart_recv_count = 0;
+                continue;
+            }
+            else if (s_locater_uart_recv_count > 2 && \
                     s_locater_uart_recv_buff[s_locater_uart_recv_count - 1] == '\n' && \
                 s_locater_uart_recv_buff[s_locater_uart_recv_count - 2] == '\r')
             {
@@ -463,8 +472,14 @@ uart_rx_task_retry_get_one_event:
                             p_get_one++;
                             continue;
                         }
-                        // 找到一个完整的消息
-                        else if (*p_get_one == '\n' || j >= UART_EVENT_QUE_CONTEN_SIZE) {
+                        /*
+                        *  找到一个完整的消息。
+                        *  限制条件是，当遇到回车换行符的时候，才退出。
+                        *  解决数据中间掺和着回车，或者换行的情况。
+                        */
+                        else if (((p_get_one > p_match_one) && (*(p_get_one - 1) == '\r') && (*p_get_one == '\n')) || \
+                                (j >= UART_EVENT_QUE_CONTEN_SIZE))
+                        {
                             p_get_one++;
                             break;
                         }

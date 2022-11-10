@@ -68,19 +68,21 @@ static void locater_marks_flags_32(unsigned int *p_flags, unsigned int mask)
 }
 
 
-#define CODE_BASE (86)
+#define CODE_BASE (217)
 #define INT_LENGTH (5)
 
-static char CODE_86[86] = {
-    '%', '"', '!', '&', ',', '(', ')', '`', '-', '.',
-    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
-    ':', ';', '<', '=', '>', '?', '@', 'A', 'B', 'C',
-    'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
-    'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W',
-    'X', 'Y', 'Z', '[', ']', '^', 'a', 'b', 'c', 'd',
-    'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n',
-    'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x',
-    'y', 'z', '{', '|', '}', '~'
+static char s_locater_86_code_char_array[CODE_BASE] = {
+    33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 45, 47, 48, 49, 50, 51, 52, 53, 54, 55,
+    56, 57, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76,
+    77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96,
+    97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116,
+    117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137,
+    138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157,
+    158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177,
+    178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197,
+    198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217,
+    218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237,
+    238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254
 };
 
 static char *locater_int_to_code86(int my_int, char *int_string)
@@ -89,7 +91,7 @@ static char *locater_int_to_code86(int my_int, char *int_string)
 
     int position = 0;
     for (int i = 0; i < INT_LENGTH; i++) {
-        int_string[position] = CODE_86[the_rest % CODE_BASE];
+        int_string[position] = s_locater_86_code_char_array[the_rest % CODE_BASE];
         the_rest = the_rest / CODE_BASE;
         position++;
 
@@ -103,7 +105,7 @@ static int locater_code86_to_int(const char *code)
     int my_int = 0;
     for (int i = INT_LENGTH - 1; i > -1; i--) {
         for (int k = 0; k < CODE_BASE; k++) {
-            if (code[i] == CODE_86[k]) {
+            if (code[i] == s_locater_86_code_char_array[k]) {
                 my_int = my_int * CODE_BASE + k;
                 break;
             }
@@ -2774,7 +2776,7 @@ static int locater_uart_get_location_info(struct locater_location_info_fmt_s *p_
     sprintf(buff, "%d%d", p_utc[4], p_utc[5]);
     ss = atoi(buff);
     p_location_info->time_stamp = hh * 60 * 60 + mm * 60 + ss;
-    printf("locate_info, get p_utc: %s, time_stamp: 0x%08x", p_utc, p_location_info->time_stamp);
+    printf("locate_info, get p_utc: %s, time_stamp: 0x%08x\n", p_utc, p_location_info->time_stamp);
 
     // 转换成经纬度
     sprintf(buff, "%d%d", p_latitude[0], p_latitude[1]);
@@ -2897,7 +2899,7 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(1) {
 
 LOCATOR_UART_FSM_COM_STEP_ENTRY(5) {
         struct locater_location_info_fmt_s location_info = {0};
-        struct locator_uart_protocol_dev_upload_location_mult_payload_fmt_s location_mult = {0};
+        struct locator_uart_protocol_dev_upload_location_mult_payload_fmt_s *p_location_mult = NULL;
 
         printf("app_once_positioning, detect device continuous positioning\n");
         if (!is_locator_init) {
@@ -2920,12 +2922,17 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(5) {
             continue;
         }
 
-        location_mult.type = 1;
-        location_mult.time_stamp = location_info.time_stamp;
-        location_mult.latitude = location_info.latitude;
-        location_mult.longitude = location_info.longitude;
+        memset(mqtt_payload_str_buf, 0, sizeof(mqtt_payload_str_buf));
+        p_location_mult = (struct locator_uart_protocol_dev_upload_location_mult_payload_fmt_s *)mqtt_payload_str_buf;
+        p_location_mult->type = 1;
+        locater_int_to_code86(location_info.time_stamp, (char *)&p_location_mult->time_stamp);
+        locater_int_to_code86(location_info.latitude, (char *)&p_location_mult->latitude);
+        locater_int_to_code86(location_info.longitude, (char *)&p_location_mult->longitude);
         sprintf(mqtt_topic_str_buf, "%sD/0/B", p_serial);
-        locater_uart_set_mqtt_pub(client_handle, mqtt_topic_str_buf, (char *)&location_mult, qos, remain, 0);
+        qos = 1;
+        remain = 1;
+        // locater_uart_set_mqtt_pub(client_handle, mqtt_topic_str_buf, (char *)&p_location_mult, qos, remain, 0);
+        locater_uart_set_mqtt_pub(client_handle, mqtt_topic_str_buf, "123456789", qos, remain, 0);
         printf("app_once_positioning, upload once positioning done\n");
         printf("\n\n");
         v_task_delay(5000 / port_tick_period_ms);
