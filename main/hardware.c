@@ -399,6 +399,7 @@ static void uart_rx_task(void *arg)
     char event_buff[UART_EVENT_QUE_CONTEN_SIZE];
     unsigned int curr_event_len = 0, all_event_len = 0;
     unsigned int process_idx = 0;
+    bool is_handle_again = false;
 
     esp_log_level_set(RX_TASK_TAG, ESP_LOG_INFO);
     while (true) {
@@ -417,12 +418,14 @@ static void uart_rx_task(void *arg)
             s_locater_uart_recv_count += rx_final;
             s_locater_uart_recv_buff[s_locater_uart_recv_count] = 0;
 
+uart_rx_task_handle_again:
             /*
             *  在此检测4G模块的事件，例如服务器下发的事件等。
             *  如果是一个完整的句子，那么在处理，否则继续等待。
             *  如果是一个消息，那么把消息提取出来。并且把消息移除掉。
             */
-            printf("uart_rx_task, uart_recv_count: %04d (+%04d)\n", s_locater_uart_recv_count, rx_final);
+            printf("uart_rx_task, uart_recv_count: %04d (+%04d) %s\n", s_locater_uart_recv_count, \
+                rx_final, is_handle_again ? "after update recv count" : "n/a");
 
             if (s_locater_uart_debug_mode) {
                 printf("uart_rx_task, recv_buff:\n");
@@ -434,16 +437,19 @@ static void uart_rx_task(void *arg)
             process_idx = 0;
             p_first_one = NULL;
             p_get_one = s_locater_uart_recv_buff;
+            is_handle_again = false;
 
             if (s_locater_uart_recv_count == 2 && \
                     s_locater_uart_recv_buff[s_locater_uart_recv_count - 1] == '\n' && \
-                    s_locater_uart_recv_buff[s_locater_uart_recv_count - 2] == '\r')
+                s_locater_uart_recv_buff[s_locater_uart_recv_count - 2] == '\r')
             {
                 /*
                 *  解决接收缓存刚开始的两字节出现挥着换行符。
                 *  处理方法是直接去掉。
                 */
                 s_locater_uart_recv_count = 0;
+                memset(s_locater_uart_recv_buff, 0, s_locater_uart_recv_count);
+                printf("uart_rx_task, recv_buff clean\n");
                 continue;
             }
             else if (s_locater_uart_recv_count > 2 && \
@@ -506,23 +512,33 @@ uart_rx_task_retry_get_one_event:
                     // 尝试在匹配一下当前类型的消息
                     goto uart_rx_task_retry_get_one_event;
                 }
-
-                // 如果接收的buff中存在消息，那么把消息给擦除掉
-                if (p_first_one) {
-                    // 把消息从buff中擦除
-                    p_next_one = p_get_one;
-                    p_prev_one = p_first_one;
-                    while (true) {
-                        if (!(*p_next_one))
-                            break;
-                        *p_prev_one++ = *p_next_one++;
-                    }
-                    *p_prev_one = '\0';
-                    s_locater_uart_recv_count -= all_event_len;
-                    printf("uart_rx_task, event_%04d, recv_count update: %d\n", \
-                        process_idx, s_locater_uart_recv_count);
+                if (!p_first_one) {
+                    printf("uart_rx_task, match none\n");
+                    goto uart_rx_task_handle_done;
                 }
+
+                /*
+                *  如果接收的buff中存在消息，那么把消息给擦除掉
+                *  把消息从buff中擦除
+                */
+                p_next_one = p_get_one;
+                p_prev_one = p_first_one;
+                while (true) {
+                    if (!(*p_next_one))
+                        break;
+                    *p_prev_one++ = *p_next_one++;
+                }
+                *p_prev_one = '\0';
+                s_locater_uart_recv_count -= all_event_len;
+                printf("uart_rx_task, event_%04d, recv_count update: %d\n", process_idx, s_locater_uart_recv_count);
+                is_handle_again = true;
+                goto uart_rx_task_handle_again;
             }
+            else {
+                printf("uart_rx_task, wait more byte\n");
+            }
+
+uart_rx_task_handle_done:
             pthread_mutex_unlock(&s_locater_uart_data_mutex);
             s_is_locater_uart_recv_ready = true;
         }
