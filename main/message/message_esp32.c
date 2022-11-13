@@ -130,7 +130,7 @@ void message_handle()
 		case 5:
 			wifi_init();
 			wifi_set_user_pwd("CMCC-NtKi", "3d687272");
-			sys_ota_set_url("http://192.168.1.6:8080/hello_world.bin");
+			sys_ota_set_url("http://1.117.221.12:8080/ota/hello_world_0.0.1.bin");
 			sys_ota();
 			//messsage_location_report_continus();//5 message
 			break;
