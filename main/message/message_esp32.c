@@ -108,12 +108,20 @@ void message_handle()
 		case 2:
 			wifi_init();
 			wifi_scan();
+			char mac[24] = {0};
 			ulapcnt = wifi_get_info(&pstWifiInfo);
 			printf("Get Ap Cnt %d\r\n", ulapcnt);
 			for(ulIdx = 0;ulIdx < ulapcnt; ulIdx++)
 			{
 				printf("SSID:%s\r\n", pstWifiInfo[ulIdx].ssid);
-				printf("MAC:%s\r\n", pstWifiInfo[ulIdx].mac);
+				sprintf(mac, "%x%x%x%x%x%x\0",
+					pstWifiInfo[ulIdx].mac[0],
+					pstWifiInfo[ulIdx].mac[1],
+					pstWifiInfo[ulIdx].mac[2],
+					pstWifiInfo[ulIdx].mac[3],
+					pstWifiInfo[ulIdx].mac[4],
+					pstWifiInfo[ulIdx].mac[5]);
+				printf("MAC:%s\r\n", mac);
 				printf("RSSI:%d\r\n", pstWifiInfo[ulIdx].rssi);
 			}
 			//message_alarm_report(); //6 message

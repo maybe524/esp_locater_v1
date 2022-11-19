@@ -434,6 +434,12 @@ int wifi_scan()
 			ap_info[i].bssid[5]);
 
 #endif
+		stWifi[i].mac[0] = ap_info[i].bssid[0];
+		stWifi[i].mac[1] = ap_info[i].bssid[1];
+		stWifi[i].mac[2] = ap_info[i].bssid[2];
+		stWifi[i].mac[3] = ap_info[i].bssid[3];
+		stWifi[i].mac[4] = ap_info[i].bssid[4];
+		stWifi[i].mac[5] = ap_info[i].bssid[5];
 		//memcpy(stWifi[i].bssid, ap_info[i].bssid, 6);
 
 		ESP_LOGD(TAG, "SSID \t\t%s", ap_info[i].ssid);
