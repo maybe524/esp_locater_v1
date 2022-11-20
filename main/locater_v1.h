@@ -5,12 +5,13 @@
 #define LOCATER_IMEI_SIZE   (15)
 #define locater_assert(cond)    do { \
                 if (cond) { \
-                    unsigned int timeout = 0; \
+                    unsigned int ____timeout = 0; \
                     while (1) {  \
-                        if (++timeout < 10000000) \
-                            continue;  \
-                        timeout = 0;    \
+                        if (____timeout > 10000000) \
+                            break;  \
                         printf("assert, bug! %s %d\n", __func__, __LINE__); \
+                        v_task_delay(1000 / port_tick_period_ms); \
+                        ____timeout++; \
                     } \
                 } \
             } while (0)
@@ -138,9 +139,18 @@ typedef struct locater_location_utc_info_fmt_s {
 
 typedef struct locater_location_info_fmt_s {
     unsigned int time_stamp;
-    unsigned int latitude;
-    unsigned int longitude;
+    int latitude;
+    int longitude;
 } locater_location_info_fmt_t;
 
+typedef struct locater_local_time_info_fmt_s {
+    unsigned int zone;
+    unsigned int year;
+    unsigned int month;
+    unsigned int day;
+    unsigned int hour;
+    unsigned int minute;
+    unsigned int second;
+} locater_local_time_info_fmt_t;
 
 int locater_uart_init(void);

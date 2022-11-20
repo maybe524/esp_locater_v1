@@ -429,7 +429,7 @@ uart_rx_task_handle_again:
 
             if (s_locater_uart_debug_mode) {
                 printf("uart_rx_task, recv_buff:\n");
-                ESP_LOG_BUFFER_HEXDUMP(RX_TASK_TAG, s_locater_uart_recv_buff, s_locater_uart_recv_count, ESP_LOG_INFO);
+                ESP_LOG_BUFFER_HEXDUMP("locater_uart_rx", s_locater_uart_recv_buff, s_locater_uart_recv_count, ESP_LOG_INFO);
             }
 
             all_event_len = 0;
@@ -501,7 +501,7 @@ uart_rx_task_retry_get_one_event:
 
 #if 1 //def LOCATOR_DEBUG_MODE
                     printf("uart_rx_task, event_%04d dump start\n", process_idx);
-                    ESP_LOG_BUFFER_HEXDUMP(RX_TASK_TAG, p_match_one, curr_event_len, ESP_LOG_INFO);
+                    ESP_LOG_BUFFER_HEXDUMP("locater_uart_rx", p_match_one, curr_event_len, ESP_LOG_INFO);
                     printf("uart_rx_task, event_%04d dump done!\n", process_idx);
 #endif
 

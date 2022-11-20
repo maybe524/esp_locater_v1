@@ -15,6 +15,7 @@
 #define port_tick_period_ms  portTICK_PERIOD_MS
 #define v_task_delay  vTaskDelay
 #define config_max_priorities configMAX_PRIORITIES
+#define LOCATER_SERVER_TIME (1640995200)
 
 /*
 *  //TBD: 经常发生栈溢出，临时把变量放在外边
@@ -50,7 +51,7 @@ static char s_is_locater_uart_ota_wifi_password[32] = {0};
 static char s_is_locater_uart_ota_firmware_url[1024] = {0};
 static char *sp_locater_firware_version = "0.0.1";
 static struct locater_enclosure_conf_fmt_s s_locater_enclosure_conf = {0};
-
+static struct locater_local_time_info_fmt_s s_ocater_local_time_info = {0};
 
 static unsigned int locater_uart_get_temperature(void);
 static unsigned int locater_uart_get_collision(void);
@@ -69,7 +70,7 @@ static void locater_marks_flags_32(unsigned int *p_flags, unsigned int mask)
 
 
 #define CODE_BASE (217)
-#define INT_LENGTH (5)
+#define INT_LENGTH (4)
 
 static char s_locater_86_code_char_array[CODE_BASE] = {
     33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 45, 47, 48, 49, 50, 51, 52, 53, 54, 55,
@@ -85,33 +86,58 @@ static char s_locater_86_code_char_array[CODE_BASE] = {
     238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254
 };
 
-static char *locater_int_to_code86(int my_int, char *int_string)
-{
-    int the_rest = my_int;
-
-    int position = 0;
-    for (int i = 0; i < INT_LENGTH; i++) {
-        int_string[position] = s_locater_86_code_char_array[the_rest % CODE_BASE];
-        the_rest = the_rest / CODE_BASE;
-        position++;
-
-    }
-    return int_string;
-}
-
-//*code的前5个字符必须是CODE_86字符；
-static int locater_code86_to_int(const char *code)
+static int locater_code86_to_int(const char *p_code_str, int code_size)
 {
     int my_int = 0;
-    for (int i = INT_LENGTH - 1; i > -1; i--) {
+    int position = 0;
+
+    if (code_size != 1 && code_size != 2 && code_size != 4)
+        return -1;
+
+    for (int i = code_size; i > 0; i--) {
         for (int k = 0; k < CODE_BASE; k++) {
-            if (code[i] == s_locater_86_code_char_array[k]) {
+            if (p_code_str[i - 1] == s_locater_86_code_char_array[k]) {
                 my_int = my_int * CODE_BASE + k;
                 break;
             }
         }
     }
+
     return my_int;
+}
+
+
+/**
+ * @brief 将数值（int、short、char）转换成code86.
+ * 
+ * @param my_int  [in ] 
+ * @param int_type  [in ] 
+ * @param str_buff  [in ] 
+ * @param buff_len  [in ] 
+ * @return char* 
+ * 
+ * @details 
+ */
+static char *locater_int_to_code86(int my_int, int int_type, char *str_buff, int buff_len)
+{
+    int the_rest = my_int;
+    int position = 0;
+
+    if (int_type != sizeof(char) && \
+            int_type != sizeof(short) && \
+        int_type != sizeof(int))
+        return NULL;
+
+    for (int i = 0; i < int_type; i++) {
+        str_buff[position] = s_locater_86_code_char_array[the_rest % CODE_BASE];
+        the_rest = the_rest / CODE_BASE;
+        position++;
+        if (position >= buff_len) {
+            break;
+        }
+    }
+
+    return the_rest ? NULL : str_buff;
 }
 
 /**
@@ -2701,13 +2727,16 @@ static int locater_uart_get_location_info(struct locater_location_info_fmt_s *p_
     struct locater_atres_fmt_s atres_array[32] = {0};
     struct locater_str_split_fmt_s split_array[32] = {0};
     char *p_utc = NULL, *p_latitude = NULL, *p_longitude = NULL, *p_hdop = NULL, *p_altitude = NULL, *p_fix = NULL;
-    char *p_cog = NULL, *p_spkm = NULL, *p_date = NULL, *p_errcode = NULL, *p_nsat = NULL;
+    char *p_cog = NULL, *p_spkm = NULL, *p_date = NULL, *p_errcode = NULL, *p_nsat = NULL, *p_spkn = NULL;
     unsigned int split_count = 0, split_index = 0;
     struct locater_location_utc_info_fmt_s *p_utc_fmt = NULL;
     char buff[1024];
-    unsigned int hh = 0, mm = 0, ss = 0;
-    unsigned int lat_dd = 0, lat_mm_h = 0, lat_mm_l = 0;
-    unsigned int lon_dd = 0, lon_mm_h = 0, lon_mm_l = 0;
+    unsigned int hh = 0, mi = 0, ss = 0, yy = 0, mo = 0, dd = 0;
+    int lat_dd = 0, lat_mm_h = 0, lat_mm_l = 0;
+    int lon_dd = 0, lon_mm_h = 0, lon_mm_l = 0;
+    char lat_ns = 0, lon_ew = 0;
+    unsigned int time_stamp = 0;
+    struct tm info;
 
     // 获取定位信息
     p_atcmd = "AT+QGPSLOC=0\r\n";
@@ -2763,52 +2792,100 @@ static int locater_uart_get_location_info(struct locater_location_info_fmt_s *p_
     p_cog = split_array[7].data;
     // 地面速率。单位：千米/时
     p_spkm = split_array[8].data;
-    // UTC 日期。格式：ddmmyy（
-    p_date = split_array[9].data;
+    p_spkn = split_array[9].data;
+    // UTC 日期。格式：ddmmyy
+    p_date = split_array[10].data;
     // 本系统可见卫星数量。固定两位数，前导位数不足则补 0（引自 GSV 语句）。
-    p_nsat = split_array[10].data;
+    p_nsat = split_array[11].data;
 
-    // 转换成时间戳
-    sprintf(buff, "%d%d", p_utc[0], p_utc[1]);
+    // 转换成时间戳_时间
+    sprintf(buff, "%c%c", p_utc[0], p_utc[1]);
     hh = atoi(buff);
-    sprintf(buff, "%d%d", p_utc[2], p_utc[3]);
-    mm = atoi(buff);
-    sprintf(buff, "%d%d", p_utc[4], p_utc[5]);
+    sprintf(buff, "%c%c", p_utc[2], p_utc[3]);
+    mi = atoi(buff);
+    sprintf(buff, "%c%c", p_utc[4], p_utc[5]);
     ss = atoi(buff);
-    p_location_info->time_stamp = hh * 60 * 60 + mm * 60 + ss;
-    printf("locate_info, get p_utc: %s, time_stamp: 0x%08x\n", p_utc, p_location_info->time_stamp);
+    printf("locate_info, get hh: %d, mi: %d, ss: %d\n", hh, mi, ss);
+    // 转换成时间戳_日期
+    sprintf(buff, "%c%c", p_date[4], p_date[5]);
+    yy = atoi(buff);
+    sprintf(buff, "%c%c", p_date[2], p_date[3]);
+    mo = atoi(buff);
+    sprintf(buff, "%c%c", p_date[0], p_date[1]);
+    dd = atoi(buff);
+    printf("locate_info, get yy: %d, mo: %d, dd: %d\n", yy, mo, dd);
 
-    // 转换成经纬度
-    sprintf(buff, "%d%d", p_latitude[0], p_latitude[1]);
+    info.tm_year = (2000 + yy) - 1970;
+    info.tm_mon = mo - 1;
+    info.tm_mday = dd;
+    info.tm_hour = hh;
+    info.tm_min = mi;
+    info.tm_sec = ss;
+    info.tm_isdst = -1;
+    time_stamp = mktime(&info);
+    // p_location_info->time_stamp = time_stamp - 1640995200;
+    p_location_info->time_stamp = time_stamp;
+    printf("locate_info, get p_utc: %s, p_date: %s, time_stamp_before: 0x%08x, time_stamp_after: 0x%08x\n", \
+            p_utc, p_date, time_stamp, p_location_info->time_stamp);
+
+    /*
+    *  转换成纬度
+    *  +QGPSLOC: 030832.00,2235.5077N,11358.6698E,2.55,596.5,3,0.000,2.027,1.094,131122,07
+    *  N/S: 北纬/南纬
+    *  E/W: 东经/西经
+    */
+    sprintf(buff, "%c%c", p_latitude[0], p_latitude[1]);
     lat_dd = atoi(buff);
-    sprintf(buff, "%d%d", p_latitude[2], p_latitude[3]);
+    sprintf(buff, "%c%c", p_latitude[2], p_latitude[3]);
     lat_mm_h = atoi(buff);
-    sprintf(buff, "%d%d%d%d", p_latitude[5], p_latitude[6], p_latitude[7], p_latitude[8]);
+    sprintf(buff, "%c%c%c%c", p_latitude[5], p_latitude[6], p_latitude[7], p_latitude[8]);
     lat_mm_l = atoi(buff);
-    p_location_info->latitude = lat_dd + lat_mm_h + lat_mm_l * 100000;
-    printf("locate_info, get p_latitude: %s, 0x%08x\n", p_latitude, p_location_info->latitude);
+    p_location_info->latitude = (lat_dd * 60 * 10000) + (lat_mm_h * 10000) + lat_mm_l;
+    lat_ns = p_latitude[9];
+    printf("locate_info, lat_dd: %d, lat_mm_h: %d, lat_mm_l: %d\n", lat_dd, lat_mm_h, lat_mm_l);
+    if (lat_ns == 'S')
+        p_location_info->latitude *= -1;
+    else if (lat_ns == 'N') {
+        // do nothing
+    }
+    else {
+        printf("locate_info, get lat_ns fail: %c\n", lat_ns);
+    }
+    printf("locate_info, get p_latitude_str: %s, hex: 0x%08x, dec: %d\n", p_latitude, \
+        p_location_info->latitude, p_location_info->latitude);
 
-    // 转换成经纬度
-    sprintf(buff, "%d%d", p_longitude[0], p_longitude[1]);
+    // 转换成经度
+    sprintf(buff, "%c%c%c", p_longitude[0], p_longitude[1], p_longitude[2]);
     lon_dd = atoi(buff);
-    sprintf(buff, "%d%d", p_longitude[2], p_longitude[3]);
+    sprintf(buff, "%c%c", p_longitude[3], p_longitude[4]);
     lon_mm_h = atoi(buff);
-    sprintf(buff, "%d%d%d%d", p_longitude[5], p_longitude[6], p_longitude[7], p_longitude[8]);
+    sprintf(buff, "%c%c%c%c", p_longitude[6], p_longitude[7], p_longitude[8], p_longitude[9]);
     lon_mm_l = atoi(buff);
-    p_location_info->longitude = lon_dd + lon_mm_h + lon_mm_l * 100000;
-    printf("locate_info, get p_longitude: %s, 0x%08x\n", p_longitude, p_location_info->longitude);
+    p_location_info->longitude = (lon_dd * 60 * 10000) + (lon_mm_h * 10000) + lon_mm_l;
+    printf("locate_info, lon_dd: %d, lon_mm_h: %d, lon_mm_l: %d\n", lon_dd, lon_mm_h, lon_mm_l);
+    lon_ew = p_longitude[10];
+    if (lon_ew == 'W')
+        p_location_info->longitude *= -1;
+    else if (lon_ew == 'E') {
+        // do nothing
+    }
+    else {
+        printf("locate_info, get lon_ew fail: %c\n", lon_ew);
+    }
+    printf("locate_info, get p_longitude_str: %s, hex: 0x%08x, dec: %d\n", p_longitude, \
+        p_location_info->longitude, p_location_info->longitude);
 
     printf("locate_info, get p_hdop: %s\n", p_hdop);
     printf("locate_info, get p_altitude: %s\n", p_altitude);
     printf("locate_info, get p_fix: %s\n", p_fix);
     printf("locate_info, get p_cog: %s\n", p_cog);
     printf("locate_info, get p_spkm: %s\n", p_spkm);
+    printf("locate_info, get p_spkn: %s\n", p_spkn);
     printf("locate_info, get p_date: %s\n", p_date);
     printf("locate_info, get p_nsat: %s\n", p_nsat);    
 
     return ret;
 }
-
 
 static int locater_uart_get_ati(void)
 {
@@ -2842,6 +2919,99 @@ static int locater_uart_get_ati(void)
 }
 
 /**
+ * @brief 从4G模块获取SNTP时间
+ * 
+ * @return int 
+ * 
+ * @details 
+ */
+static int locater_uart_get_sntp_time(struct locater_local_time_info_fmt_s *p_local_time)
+{
+    int ret;
+    int i = 0, j = 0;
+    char *p_atcmd = NULL;
+    int at_res_line = 0;
+    int split_count = 0, split_index = 0;
+    char at_cmd_buf[64] = {0};
+    unsigned int err = 0;
+    unsigned int client = 0;
+    unsigned int connect_err = 0;
+    unsigned int recv_cnt = 0;
+    char *p_want_ack_str = NULL;
+    struct locater_atres_fmt_s atres_array[32] = {0};
+    struct locater_str_split_fmt_s split_array[32] = {0};
+    char buff[1024];
+    char *p_zone = NULL, *p_year = NULL, *p_month = NULL, *p_day = NULL;
+    char *p_hour = NULL, *p_minute = NULL, *p_second = NULL;
+
+    if (!p_local_time) {
+        printf("get_sntp_time, argv is error\n");
+        return -1;
+    }
+
+    // +CCLK: "22/11/19,05:28:27+32"
+    p_atcmd = "AT+CCLK?\r\n";
+    p_want_ack_str = "OK";
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, p_want_ack_str, buff, sizeof(buff), 1000, 0);
+    if (ret < 0) {
+        printf("get_sntp_time, failed\n");
+        return ret;
+    }
+    recv_cnt = ret;
+    at_res_line = locater_uart_process_at_response(buff, atres_array, 32);
+
+    ret = -2;
+    p_want_ack_str = "+CCLK:";
+    for (i = 0; i < at_res_line; i++) {
+        printf("get_sntp_time, line_%02d, len_%02d: %s\n", i, strlen(atres_array[i].atreq_content), \
+            atres_array[i].atreq_content);
+
+        if (strncmp(p_want_ack_str, atres_array[i].atreq_content, strlen(p_want_ack_str)))
+            continue;
+        
+        printf("get_sntp_time, get time: %s\n", atres_array[i].atreq_content);
+        ret = 0;
+        break;
+    }
+    if (ret) {
+        printf("get_sntp_time, get time failed\n");
+        return ret;
+    }
+
+    split_count = locater_uart_split_str_bychar(atres_array[i].atreq_content, ":,/\"+", split_array, ARRAY_LEN(split_array));
+    for (split_index = 0; split_index < split_count; split_index++) {
+        printf("get_sntp_time, elem_%02d: %s\n", split_index, split_array[split_index].data);
+    }
+    if (split_count < 11) {
+        printf("get_sntp_time, get split failed\n");
+        return -1;
+    }
+
+    p_zone = split_array[9].data;
+    p_year = split_array[3].data;
+    p_month = split_array[4].data;
+    p_day = split_array[5].data;
+    p_hour = split_array[6].data;
+    p_minute = split_array[7].data;
+    p_second = split_array[8].data;
+    
+    p_local_time->zone = atoi(p_zone) / 4;
+    p_local_time->year = atoi(p_year) + 2000;
+    p_local_time->month = atoi(p_month);
+    p_local_time->day = atoi(p_day);
+    p_local_time->hour = atoi(p_hour);
+    p_local_time->minute = atoi(p_minute);
+    p_local_time->second = atoi(p_second);
+    printf("get_sntp_time, zone: %d, year: %d, month: %d, day: %d, hour: %d, minute: %d, second: %d\n", \
+            p_local_time->zone, p_local_time->year, p_local_time->month, \
+            p_local_time->day, p_local_time->hour, p_local_time->minute, \
+            p_local_time->second);
+
+    return 0;
+}
+
+
+/**
  * @brief 定位的所有任务
  * 
  * @param arg  [in ] 
@@ -2857,6 +3027,7 @@ static void locater_uart_app_location_misc_task(void *arg)
     unsigned int qos = 0, remain = 0;
     bool is_locator_init = false;
     unsigned int curr_app_idx = 0;
+    unsigned int positioning_idx = 0;
 
     while (true) {
 LOCATOR_UART_FSM_COM_STEP_ENTRY(0) {
@@ -2874,7 +3045,7 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(0) {
 
 LOCATOR_UART_FSM_COM_STEP_ENTRY(1) {
         // 标志位置位false
-        printf("app_once_positioning, detect device once positioning\n");
+        printf("location_misc, detect device once positioning\n");
         s_is_locater_uart_once_positioning = false;
         step++;
 
@@ -2882,7 +3053,7 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(1) {
         *  如果主程序告知设备没有准备好，那么放弃执行任务。
         */
         if (!s_is_locater_device_ready) {
-            printf("app_once_positioning, detect device is not ready\n");
+            printf("location_misc, detect device is not ready\n");
             continue;
         }
 
@@ -2892,50 +3063,140 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(1) {
         */
         // sprintf(mqtt_topic_str_buf, "%s/07", p_serial);
         // locater_uart_set_mqtt_pub(client_handle, mqtt_topic_str_buf, mqtt_payload_str_buf, qos, remain, 0);
-        // printf("app_once_positioning, upload once positioning done\n");
+        // printf("location_misc, upload once positioning done\n");
         step = 0;
         continue;
       }
 
+    ///< 连续定位的初始化
 LOCATOR_UART_FSM_COM_STEP_ENTRY(5) {
-        struct locater_location_info_fmt_s location_info = {0};
-        struct locator_uart_protocol_dev_upload_location_mult_payload_fmt_s *p_location_mult = NULL;
+        printf("location_misc, continuous positioning init\n");
+        locater_uart_set_location_init();
+        wifi_init();
+        step++;
+    }
 
-        printf("app_once_positioning, detect device continuous positioning\n");
-        if (!is_locator_init) {
-            is_locator_init = true;
-            locater_uart_set_location_init();
-        }
+LOCATOR_UART_FSM_COM_STEP_ENTRY(6) {
+        struct locater_location_info_fmt_s location_info = {0};
+        struct locator_uart_protocol_dev_upload_location_gps_fmt_s *p_location_gps = NULL;
+        struct locator_uart_protocol_dev_upload_location_wifi_fmt_s *p_location_wifi = NULL;
+        struct locator_uart_protocol_dev_upload_location_mult_payload_fmt_s *p_location_mul = NULL;
+        unsigned int payload_size = 1;
+        int check_payload_size = 0;
+        int check_longitude = 0, check_latitude = 0;
+        int location_res = 0;
+        unsigned int wifi_cnt = 0, wifi_idx = 0;
+	    STRU_WIFI_INFO *p_wifi_info  = NULL;
+        char mac_rssi = 0;
+        char *p_offs = NULL;
+        unsigned int time_stamp = 0;
+        unsigned int location_count = 0;
+
+        printf("location_misc, device continuous positioning: %08d\n", positioning_idx);
+        positioning_idx++;
         // 检测到用户换了手机，或者同一个手机可能重新登录，那么结束本次任务
-        else if (curr_app_idx != s_locater_uart_curr_app_idx) {
-            printf("app_once_positioning, detect app idx is update\n");
+        if (curr_app_idx != s_locater_uart_curr_app_idx || \
+                !s_is_locater_uart_continuous_positioning)
+        {
+            printf("location_misc, detect app idx is update\n");
             s_is_locater_uart_continuous_positioning = false;
             locater_uart_set_location_exit();
             step = 0;
-            continue;
-        }
-
-        memset(&location_info, 0, sizeof(location_info));
-        ret = locater_uart_get_location_info(&location_info);
-        if (ret < 0) {
-            v_task_delay(5000 / port_tick_period_ms);
+            positioning_idx = 0;
             continue;
         }
 
         memset(mqtt_payload_str_buf, 0, sizeof(mqtt_payload_str_buf));
-        p_location_mult = (struct locator_uart_protocol_dev_upload_location_mult_payload_fmt_s *)mqtt_payload_str_buf;
-        p_location_mult->type = 1;
-        locater_int_to_code86(location_info.time_stamp, (char *)&p_location_mult->time_stamp);
-        locater_int_to_code86(location_info.latitude, (char *)&p_location_mult->latitude);
-        locater_int_to_code86(location_info.longitude, (char *)&p_location_mult->longitude);
-        sprintf(mqtt_topic_str_buf, "%sD/0/B", p_serial);
+        p_location_mul = (struct locator_uart_protocol_dev_upload_location_mult_payload_fmt_s *)mqtt_payload_str_buf;
+        p_offs = (char *)&p_location_mul->data;
+        time_stamp = time(NULL);
+        printf("location_misc, time_stamp1: %ld\n", time_stamp);
+        locater_assert(time_stamp < LOCATER_SERVER_TIME);
+        time_stamp -= LOCATER_SERVER_TIME;
+        printf("location_misc, time_stamp2: %ld\n", time_stamp);
+
+        ///< 获取WIFI信号
+        wifi_scan();
+        wifi_cnt = wifi_get_info(&p_wifi_info);
+        printf("location_misc, detect wifi_cnt: %d\n", wifi_cnt);
+        if (wifi_cnt) {
+            p_location_wifi = (struct locator_uart_protocol_dev_upload_location_wifi_fmt_s *)p_offs;
+            p_location_wifi->type = 0x32;
+            locater_int_to_code86(wifi_cnt, sizeof(char), (char *)&p_location_wifi->count, 1);
+            locater_int_to_code86(time_stamp, sizeof(int), (char *)&p_location_wifi->time_stamp, 4);
+            p_offs = p_location_wifi->info->mac;
+            for (wifi_idx = 0; wifi_idx < wifi_cnt; wifi_idx++) {
+                struct locator_uart_location_wifi_item_s *p_item = \
+                    (struct locator_uart_location_wifi_item_s *)p_offs;
+                ///< 按协议。取反+100 范围0-216
+                mac_rssi = p_wifi_info[wifi_idx].rssi < 0 ? -(p_wifi_info[wifi_idx].rssi) : p_wifi_info[wifi_idx].rssi;
+                mac_rssi += 70;
+                printf("location_misc, wifi_idx: %04d, mac: %02x-%02x-%02x-%02x-%02x-%02x, ssid: %s, "
+                    "rssi: %d(dec: %d, hex: 0x%02x)\r\n", wifi_idx, \
+                    p_wifi_info[wifi_idx].mac[0], p_wifi_info[wifi_idx].mac[1], \
+                    p_wifi_info[wifi_idx].mac[2], p_wifi_info[wifi_idx].mac[3], \
+                    p_wifi_info[wifi_idx].mac[4], p_wifi_info[wifi_idx].mac[5], \
+                    p_wifi_info[wifi_idx].ssid, p_wifi_info[wifi_idx].rssi, mac_rssi, mac_rssi);
+                sprintf(p_item->mac, "%x%x:%x%x:%x%x:%x%x:%x%x:%x%x", \
+                   (p_wifi_info[wifi_idx].mac[0] >> 4) & 0x0f, (p_wifi_info[wifi_idx].mac[0] >> 0) & 0x0f, \
+                   (p_wifi_info[wifi_idx].mac[1] >> 4) & 0x0f, (p_wifi_info[wifi_idx].mac[1] >> 0) & 0x0f, \
+                   (p_wifi_info[wifi_idx].mac[2] >> 4) & 0x0f, (p_wifi_info[wifi_idx].mac[2] >> 0) & 0x0f, \
+                   (p_wifi_info[wifi_idx].mac[3] >> 4) & 0x0f, (p_wifi_info[wifi_idx].mac[3] >> 0) & 0x0f, \
+                   (p_wifi_info[wifi_idx].mac[4] >> 4) & 0x0f, (p_wifi_info[wifi_idx].mac[4] >> 0) & 0x0f, \
+                   (p_wifi_info[wifi_idx].mac[5] >> 4) & 0x0f, (p_wifi_info[wifi_idx].mac[5] >> 0) & 0x0f);
+                locater_int_to_code86(mac_rssi, sizeof(char), (char *)&p_item->rssi, 1);
+                ///< 计算下一次偏移
+                p_offs += sizeof(struct locator_uart_location_wifi_item_s);
+                location_count++;
+            }
+        }
+
+        ///< 获取定位
+        memset(&location_info, 0, sizeof(location_info));
+        location_res = locater_uart_get_location_info(&location_info);
+        if (!location_res) {
+            p_location_gps = (struct locator_uart_protocol_dev_upload_location_gps_fmt_s *)p_offs;
+            // 定位数据类型是31
+            p_location_gps->type = 0x31;
+            printf("location_misc, gps_time_stamp: %ld, local_time_stamp\n", location_info.time_stamp, time_stamp);
+            locater_int_to_code86(time_stamp, sizeof(int), (char *)&p_location_gps->time_stamp, 4);
+
+            // 表示纬度时负数+180转为正数
+            if (location_info.latitude < 0)
+                location_info.latitude += 180;
+            locater_int_to_code86(location_info.latitude, sizeof(int), (char *)&p_location_gps->latitude, 4);
+            // 表示经度时，负数+360转为正数
+            if (location_info.longitude < 0)
+                location_info.longitude += 360;
+            locater_int_to_code86(location_info.longitude, sizeof(int), (char *)&p_location_gps->longitude, 4);
+            printf("location_misc, final latitude: %d, longitude: %d\n", location_info.latitude, location_info.longitude);
+
+            // 检验
+            check_payload_size = locater_code86_to_int(mqtt_payload_str_buf, 2);
+            check_longitude = locater_code86_to_int((char *)&p_location_gps->longitude, 4);
+            check_latitude = locater_code86_to_int((char *)&p_location_gps->latitude, 4);
+            printf("location_misc, check payload_size: %d, latitude: %d, longitude: %d\n", \
+                check_payload_size, check_latitude, check_longitude);
+            p_offs += sizeof(struct locator_uart_protocol_dev_upload_location_gps_fmt_s);
+            location_count++;
+        }
+
+        if (!location_count) {
+            v_task_delay(8000 / port_tick_period_ms);
+            continue;
+        }
+        locater_int_to_code86(location_count, sizeof(short), (char *)&p_location_mul->count, 2);
+
         qos = 1;
-        remain = 1;
-        // locater_uart_set_mqtt_pub(client_handle, mqtt_topic_str_buf, (char *)&p_location_mult, qos, remain, 0);
-        locater_uart_set_mqtt_pub(client_handle, mqtt_topic_str_buf, "123456789", qos, remain, 0);
-        printf("app_once_positioning, upload once positioning done\n");
+        remain = 0;
+        ESP_LOG_BUFFER_HEXDUMP("locater_mul_lc", mqtt_payload_str_buf, sizeof(mqtt_payload_str_buf), ESP_LOG_INFO);
+        sprintf(mqtt_topic_str_buf, "%sD/0/B", p_serial);
+        locater_uart_set_mqtt_pub(client_handle, mqtt_topic_str_buf, (char *)mqtt_payload_str_buf, qos, remain, 0);
+        printf("location_misc, upload once positioning done\n");
         printf("\n\n");
-        v_task_delay(5000 / port_tick_period_ms);
+
+        // s_is_locater_uart_continuous_positioning = false;
+        v_task_delay(8000 / port_tick_period_ms);
         continue;
       }
     }
@@ -3331,8 +3592,13 @@ static void locater_uart_app_main_task(void *arg)
     while (true) {
     // 处理4G模块上电过程
 LOCATOR_UART_FSM_COM_STEP_ENTRY(0) {
+        time_t x;
         printf("\n\n");
         printf("firware_version: %s, build_time: %s %s\n", sp_locater_firware_version, __DATE__, __TIME__);
+        
+        time(&x);
+        printf("app_main, time = %ld, %ld\n", time(NULL), x);
+
         printf("//////////////////%04d//////////////////\n", idx++);
         s_is_locater_device_ready = false;
 
@@ -3459,11 +3725,42 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(1) {
 
     // 订阅消息
 LOCATOR_UART_FSM_COM_STEP_ENTRY(2) {
-        printf("\r\n\r\n");
-        ret = locater_uart_get_imei_str(&s_locater_atres_cgsn);
+        struct timeval stime = {0};
+        struct tm info = {0};
+        struct locater_local_time_info_fmt_s local_time_info = {0};
+        unsigned int time_stamp = 0;
+        time_t x;
 
+        printf("\r\n\r\n");
+
+        ///< 获取IMEI号
+        ret = locater_uart_get_imei_str(&s_locater_atres_cgsn);
         printf("imei_str, str result: %s\n", s_locater_atres_cgsn.imei_buff);
         locater_assert(ret);
+
+        ///< 获取SNTP时间
+        ret = locater_uart_get_sntp_time(&local_time_info);
+        locater_assert(ret);
+        ///< 配置时区
+        setenv("TZ", "CST-8", 1);
+        tzset();
+
+        info.tm_year = local_time_info.year - 1900;
+        info.tm_mon = local_time_info.month - 1;
+        info.tm_mday = local_time_info.day;
+        info.tm_hour = local_time_info.hour;
+        info.tm_min = local_time_info.minute;
+        info.tm_sec = local_time_info.second;
+        info.tm_isdst = -1;
+        time_stamp = mktime(&info);
+        printf("app_main, time_stamp from 1900: %u\n", time_stamp);
+        // 设置本地时间
+        stime.tv_sec = time_stamp;
+        settimeofday(&stime, NULL);
+        // 获取本地时间
+        time(&x);
+        printf("app_main, time: %u, x: %u\n", time(NULL), x);
+
         locater_uart_get_device_serial_by_imei(s_locater_atres_cgsn.imei_64, s_locater_device_serial_buff, \
             sizeof(s_locater_device_serial_buff));
         printf("device_serial, str result: %s\n", s_locater_device_serial_buff);
@@ -3506,7 +3803,7 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(2) {
         printf("app_main, clear uart recv buff data\n");
         uart_set_buff_clean();
 
-        // s_is_locater_uart_continuous_positioning = true;
+        s_is_locater_uart_continuous_positioning = true;
         retry_cnt = 0;
         s_is_locater_device_ready = true;
         step++;
@@ -3574,17 +3871,18 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(3) {
             // 解析这个消息内容，APP上线/下线通知
             sprintf(mqtt_topic_str_buf, "\"%s/0/5\"", p_serial);
             if (!strncmp(p_topic, mqtt_topic_str_buf, strlen(mqtt_topic_str_buf))) {
-                struct locator_uart_protocol_app_on_line_fmt_s *p_app_online_fmt = \
-                        (struct locator_uart_protocol_app_on_line_fmt_s *)&p_payload[1];
+                struct locator_uart_protocol_app_on_line_fmt_s app_online_info;
+                app_online_info.is_on_line = p_payload[0];
+                app_online_info.app_idx = locater_code86_to_int(&p_payload[1], 4);
                 printf("main_event_centre, app online info: 0x%02x, app_new_idx: 0x%04x, app_old_idx: 0x%04x\n", \
-                        p_app_online_fmt->is_on_line, p_app_online_fmt->app_idx, s_locater_uart_curr_app_idx);
+                        app_online_info.is_on_line, app_online_info.app_idx, s_locater_uart_curr_app_idx);
                 /*
                 *  记录App在线情况。
                 *  所有的业务都需要检测是否APP上线，以及app_idx是否发生变化！
                 */
-                if (p_app_online_fmt->is_on_line == 0x31) {
+                if (app_online_info.is_on_line == 0x31) {
                     s_is_locater_uart_curr_app_online = true;
-                    s_locater_uart_curr_app_idx = p_app_online_fmt->app_idx;
+                    s_locater_uart_curr_app_idx = app_online_info.app_idx;
                 }
                 else {
                     s_is_locater_uart_curr_app_online = false;
@@ -3616,7 +3914,7 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(3) {
                 continue;
             }
 
-            // 接收不安比连续定位指令，QOS=0
+            // 接收连续定位指令，QOS=0
             sprintf(mqtt_topic_str_buf, "\"%s/57\"", p_serial);
             if (!strncmp(p_topic, mqtt_topic_str_buf, strlen(mqtt_topic_str_buf))) {
                 printf("main_event_centre, device close continuous positioning\n");

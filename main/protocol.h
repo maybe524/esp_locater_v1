@@ -72,11 +72,33 @@ typedef struct locator_uart_protocol_app_set_user_setting_payload_fmt_s {
     char reserv2[4];
 } locator_uart_protocol_app_set_user_setting_payload_fmt_t;
 
-typedef struct locator_uart_protocol_dev_upload_location_mult_payload_fmt_s {
+typedef struct locator_uart_protocol_dev_upload_location_gps_fmt_s {
     char type;
     unsigned int time_stamp;
     unsigned int latitude;
     unsigned int longitude;
+} locator_uart_protocol_dev_upload_location_gps_fmt_t;
+
+struct locator_uart_location_wifi_item_s {
+    char mac[17];
+    char rssi;
+}; 
+
+typedef struct locator_uart_protocol_dev_upload_location_wifi_fmt_s {
+    char type;
+    unsigned int time_stamp;
+    char count;
+    struct locator_uart_location_wifi_item_s info[32];
+} locator_uart_protocol_dev_upload_location_wifi_fmt_t;
+
+typedef struct locator_uart_protocol_dev_upload_location_mult_payload_fmt_s {
+    unsigned short count;
+    unsigned char data[128];
 } locator_uart_protocol_dev_upload_location_mult_payload_fmt_t;
+
+#define container_of(ptr, type, member) ({ \
+        const typeof( ((type *)0)->member ) *__mptr = (ptr);    \
+    (type *)( (char *)__mptr - offsetof(type,member) );})
+
 
 #pragma pack ()
