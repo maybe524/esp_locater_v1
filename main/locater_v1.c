@@ -42,7 +42,7 @@ static bool s_is_locater_uart_need_wifi_scan_rssi_by_mac_array = false;
 static bool s_is_locater_uart_need_wifi_scan_rssi_by_mac = false;
 static unsigned int s_is_locater_uart_need_wifi_scan_rssi_by_mac_app_idx = 0;
 static pthread_mutex_t s_locater_uart_4g_module_mutex;
-static char *p_serial = "QAZWSXQAZ";
+static char *p_serial = "XYZXYZXYZ";
 static bool s_is_locater_uart_need_ota = false;
 static bool s_is_locater_uart_ota_broadcast_stop_task = false;
 static unsigned s_locater_uart_ota_stop_task_count = 0;
@@ -1500,7 +1500,7 @@ static int locater_uart_set_mqtt_connect(void)
     // 若出现任何错误：
     // ERROR
     lp_res_want_ack_str = "+QMTCONN:";
-    p_atcmd = "AT+QMTCONN=0,\"wPkWCaQVZ\",\"ABCABCABC\",\"ABCABCABC\"\r\n";
+    p_atcmd = "AT+QMTCONN=0,\"wPkWCaQVZ\",\"XYZXYZXYZ\",\"XYZXYZXYZ\"\r\n";
     ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, lp_res_want_ack_str, buff, sizeof(buff), 1000, 0);
     if (ret < 0) {
         printf("mqtt_connect, failed\n");
@@ -3700,6 +3700,7 @@ static void locater_uart_app_ota_misc_task(void *arg)
     unsigned int locater_uart_ota_stop_task_count_bak = 0;
     unsigned int curr_time_stamp = 0;
     unsigned int update_time_last_timestamp = 0, update_time_curr_timestamp = 0;
+	char wifi_name[64] = {0};
 
     while (true) {
 LOCATOR_UART_FSM_COM_STEP_ENTRY(0) {
