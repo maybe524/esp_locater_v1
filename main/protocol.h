@@ -96,9 +96,20 @@ typedef struct locator_uart_protocol_dev_upload_location_mult_payload_fmt_s {
     unsigned char data[128];
 } locator_uart_protocol_dev_upload_location_mult_payload_fmt_t;
 
-#define container_of(ptr, type, member) ({ \
-        const typeof( ((type *)0)->member ) *__mptr = (ptr);    \
-    (type *)( (char *)__mptr - offsetof(type,member) );})
+typedef struct locator_uart_protocol_dev_upload_location_lbs_lte_fmt_s {
+    short mcc;
+    short mnc;
+    short lac;
+    unsigned int cell_id;
+    char signal;
+} locator_uart_protocol_dev_upload_location_lbs_lte_fmt_t;
+
+typedef struct locator_uart_protocol_dev_upload_location_lbs_fmt_s {
+    char type;
+    unsigned int time_stamp;
+    char base_stationst_count;
+    unsigned char data[128];
+} locator_uart_protocol_dev_upload_location_lbs_fmt_t;
 
 
 #pragma pack ()

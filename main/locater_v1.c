@@ -73,7 +73,7 @@ static void locater_marks_flags_32(unsigned int *p_flags, unsigned int mask)
 #define INT_LENGTH (4)
 
 static char s_locater_86_code_char_array[CODE_BASE] = {
-    33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 45, 47, 48, 49, 50, 51, 52, 53, 54, 55,
+    33, 35, 36, 37, 38, 39, 40, 41, 42, 30, 45, 47, 48, 49, 50, 51, 52, 53, 54, 55,
     56, 57, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76,
     77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96,
     97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116,
@@ -3012,6 +3012,169 @@ static int locater_uart_get_sntp_time(struct locater_local_time_info_fmt_s *p_lo
 
 
 /**
+ * @brief 获取周边基站信号
+ * 
+ * @return int 
+ * 
+ * @details 
+ */
+static int locater_uart_get_serving_cell(struct locater_serving_cell_info_fmt_s *p_serving_cell_array, 
+        unsigned int array_len, unsigned int *p_final_used_count)
+{
+    int ret;
+    int i = 0, j = 0;
+    char *p_atcmd = NULL;
+    int at_res_line = 0;
+    int split_count = 0, split_index = 0;
+    char at_cmd_buf[64] = {0};
+    unsigned int err = 0;
+    unsigned int client = 0;
+    unsigned int connect_err = 0;
+    unsigned int recv_cnt = 0;
+    char *p_want_ack_str = NULL;
+    struct locater_atres_fmt_s atres_array[32] = {0};
+    struct locater_str_split_fmt_s split_array[32] = {0};
+    char buff[1024];
+    char *p_state = NULL, *p_is_tdd = NULL, *p_mcc = NULL, *p_mnc = NULL, *p_cell_id = NULL;
+    char *p_pci = NULL, *p_earfcn = NULL, *p_freq_band_ind = NULL, *p_ul_bandwidth = NULL, *p_dl_bandwidth = NULL;
+    char *p_tac = NULL, *p_rsrp = NULL, *p_rsrq = NULL, *p_rssi = NULL, *p_sinr = NULL;
+    char *p_srxlev = NULL, *p_mode = NULL;
+    char *p_ptr = NULL;
+    unsigned int final_used_count = 0;
+    struct locater_serving_cell_info_fmt_s *p_serving_cell = NULL;
+
+    if (!p_serving_cell_array || !array_len || !p_final_used_count) {
+        printf("get_serving_cell, check argv fail\n");
+        return -1;
+    }
+
+    p_atcmd = "AT+QENG=\"servingcell\"\r\n";
+    p_want_ack_str = "OK";
+    ret = locater_uart_send_atcmd_2_4g_module(p_atcmd, p_want_ack_str, buff, sizeof(buff), 1000, 0);
+    if (ret < 0) {
+        printf("get_serving_cell, failed\n");
+        return ret;
+    }
+    recv_cnt = ret;
+    at_res_line = locater_uart_process_at_response(buff, atres_array, 32);
+
+    ret = -2;
+    p_want_ack_str = "+QENG:";
+    for (i = 0; i < at_res_line; i++) {
+        printf("get_serving_cell, line_%02d, len_%02d: %s\n", i, \
+            strlen(atres_array[i].atreq_content), atres_array[i].atreq_content);
+
+        if (strncmp(p_want_ack_str, atres_array[i].atreq_content, strlen(p_want_ack_str)))
+            continue;
+        
+        split_count = locater_uart_split_str_bychar(atres_array[i].atreq_content, ":,/\"+", split_array, ARRAY_LEN(split_array));
+        for (split_index = 0; split_index < split_count; split_index++) {
+            printf("get_serving_cell, elem_%02d: %s\n", split_index, split_array[split_index].data);
+        }
+        if (split_count < 11) {
+            printf("get_serving_cell, get split failed\n");
+            continue;
+        }
+
+        ret = 0;
+        p_mode = split_array[ 9].data;
+        if (!strncmp(p_mode, "LTE", 3)) {
+            printf("get_serving_cell, detect lte mode\n");
+            p_state =   split_array[ 6].data;
+            p_is_tdd =  split_array[12].data;
+            p_mcc =     split_array[14].data;
+            p_mnc =     split_array[15].data;
+            p_cell_id = split_array[16].data;
+            p_pci =     split_array[17].data;
+            p_earfcn =  split_array[18].data;
+            p_freq_band_ind = split_array[19].data;
+            p_ul_bandwidth  = split_array[20].data;
+            p_dl_bandwidth  = split_array[21].data;
+            p_tac =     split_array[22].data;
+            p_rsrp =    split_array[23].data;
+            p_rsrq =    split_array[24].data;
+            p_rssi =    split_array[25].data;
+            p_sinr =    split_array[26].data;
+            p_srxlev =  split_array[27].data;
+
+            p_serving_cell = &p_serving_cell_array[final_used_count];
+            strncpy(p_serving_cell->mode, p_mode, 32);
+            strncpy(p_serving_cell->lte_mode.state, p_state, 32);
+            strncpy(p_serving_cell->lte_mode.is_tdd, p_is_tdd, 32);
+            p_serving_cell->lte_mode.mcc = atoi(p_mcc);
+            p_serving_cell->lte_mode.mnc = atoi(p_mnc);
+            p_serving_cell->lte_mode.cell_id = strtol(p_cell_id, &p_ptr, 16);
+            p_serving_cell->lte_mode.pci = atoi(p_pci);
+            p_serving_cell->lte_mode.earfcn = atoi(p_earfcn);
+            p_serving_cell->lte_mode.freq_band_ind = atoi(p_freq_band_ind);
+            p_serving_cell->lte_mode.ul_bandwidth = atoi(p_ul_bandwidth);
+            p_serving_cell->lte_mode.dl_bandwidth = atoi(p_dl_bandwidth);
+            p_serving_cell->lte_mode.rsrp = atoi(p_rsrp);
+            p_serving_cell->lte_mode.rsrq = atoi(p_rsrq);
+            p_serving_cell->lte_mode.rssi = atoi(p_rssi);
+            p_serving_cell->lte_mode.sinr = atoi(p_sinr);
+            p_serving_cell->lte_mode.srxlev = atoi(p_srxlev);
+            p_serving_cell->lte_mode.tac = atoi(p_tac);
+            final_used_count++;
+        }
+        else if (!strncmp(p_mode, "WCDMA", 5)) {
+            printf("get_serving_cell, detect wcdma mode\n");
+        }
+        else if (!strncmp(p_mode, "GSM", 3)) {
+            printf("get_serving_cell, detect gsm mode\n");
+        }
+    }
+
+    *p_final_used_count = final_used_count;
+
+    return ret;
+}
+
+struct locater_uart_bubble_sort_info_sort_info_s {
+    int val;
+    void *p_prv_data;
+};
+
+/**
+ * @brief 冒泡排序
+ * 
+ * @param p_array  [in ] 
+ * @param array_size  [in ] 
+ * @return int 
+ * 
+ * @details 
+ */
+int locater_uart_app_bubble_sort(struct locater_uart_bubble_sort_info_sort_info_s *p_array, int array_size)
+{
+	int i = 0, j = 0;
+    int count = 0;
+    struct locater_uart_bubble_sort_info_sort_info_s temp = {0};
+
+    // if (!p_array || array_size < 1)
+        // return -1;
+
+	for (i = 0; i < array_size - 1; i++) {
+		for (count = 0, j = 0; j < array_size - 1 - i; j++) {
+			if (((p_array + j)->val) < ((p_array + j + 1)->val)) {
+				// temp = p_array[j];
+				// p_array[j] = p_array[j + 1];
+				// p_array[j + 1] = temp;
+                memcpy(&temp, &p_array[j], sizeof(struct locater_uart_bubble_sort_info_sort_info_s));
+                memcpy(&p_array[j], &p_array[j + 1], sizeof(struct locater_uart_bubble_sort_info_sort_info_s));
+                memcpy(&p_array[j + 1], &temp, sizeof(struct locater_uart_bubble_sort_info_sort_info_s));
+				count = 1;
+			}
+		}
+		if (count == 0) {
+            break;	
+        }
+	}
+
+    return 0;
+}
+
+
+/**
  * @brief 定位的所有任务
  * 
  * @param arg  [in ] 
@@ -3078,19 +3241,27 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(5) {
 
 LOCATOR_UART_FSM_COM_STEP_ENTRY(6) {
         struct locater_location_info_fmt_s location_info = {0};
+        struct locater_serving_cell_info_fmt_s serving_cell_info_array[32] = {0};
         struct locator_uart_protocol_dev_upload_location_gps_fmt_s *p_location_gps = NULL;
         struct locator_uart_protocol_dev_upload_location_wifi_fmt_s *p_location_wifi = NULL;
         struct locator_uart_protocol_dev_upload_location_mult_payload_fmt_s *p_location_mul = NULL;
+        struct locator_uart_protocol_dev_upload_location_lbs_fmt_s *p_location_lbs = NULL;
+        struct locator_uart_protocol_dev_upload_location_lbs_lte_fmt_s *p_location_lbs_lte = NULL;
+        struct locater_uart_bubble_sort_info_sort_info_s bubble_sort_info[32] = {0};
         unsigned int payload_size = 1;
         int check_payload_size = 0;
         int check_longitude = 0, check_latitude = 0;
-        int location_res = 0;
+        int location_res = 0, sering_cell_res = 0;
         unsigned int wifi_cnt = 0, wifi_idx = 0;
 	    STRU_WIFI_INFO *p_wifi_info  = NULL;
         char mac_rssi = 0;
         char *p_offs = NULL;
         unsigned int time_stamp = 0;
         unsigned int location_count = 0;
+        unsigned int serving_cell_final_count = 0;
+        unsigned int lbs_idx = 0;
+        unsigned int final_wifi_cnt = 0;
+        
 
         printf("location_misc, device continuous positioning: %08d\n", positioning_idx);
         positioning_idx++;
@@ -3115,49 +3286,18 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(6) {
         time_stamp -= LOCATER_SERVER_TIME;
         printf("location_misc, time_stamp2: %ld\n", time_stamp);
 
-        ///< 获取WIFI信号
-        wifi_scan();
-        wifi_cnt = wifi_get_info(&p_wifi_info);
-        printf("location_misc, detect wifi_cnt: %d\n", wifi_cnt);
-        if (wifi_cnt) {
-            p_location_wifi = (struct locator_uart_protocol_dev_upload_location_wifi_fmt_s *)p_offs;
-            p_location_wifi->type = 0x32;
-            locater_int_to_code86(wifi_cnt, sizeof(char), (char *)&p_location_wifi->count, 1);
-            locater_int_to_code86(time_stamp, sizeof(int), (char *)&p_location_wifi->time_stamp, 4);
-            p_offs = p_location_wifi->info->mac;
-            for (wifi_idx = 0; wifi_idx < wifi_cnt; wifi_idx++) {
-                struct locator_uart_location_wifi_item_s *p_item = \
-                    (struct locator_uart_location_wifi_item_s *)p_offs;
-                ///< 按协议。取反+100 范围0-216
-                mac_rssi = p_wifi_info[wifi_idx].rssi < 0 ? -(p_wifi_info[wifi_idx].rssi) : p_wifi_info[wifi_idx].rssi;
-                mac_rssi += 70;
-                printf("location_misc, wifi_idx: %04d, mac: %02x-%02x-%02x-%02x-%02x-%02x, ssid: %s, "
-                    "rssi: %d(dec: %d, hex: 0x%02x)\r\n", wifi_idx, \
-                    p_wifi_info[wifi_idx].mac[0], p_wifi_info[wifi_idx].mac[1], \
-                    p_wifi_info[wifi_idx].mac[2], p_wifi_info[wifi_idx].mac[3], \
-                    p_wifi_info[wifi_idx].mac[4], p_wifi_info[wifi_idx].mac[5], \
-                    p_wifi_info[wifi_idx].ssid, p_wifi_info[wifi_idx].rssi, mac_rssi, mac_rssi);
-                sprintf(p_item->mac, "%x%x:%x%x:%x%x:%x%x:%x%x:%x%x", \
-                   (p_wifi_info[wifi_idx].mac[0] >> 4) & 0x0f, (p_wifi_info[wifi_idx].mac[0] >> 0) & 0x0f, \
-                   (p_wifi_info[wifi_idx].mac[1] >> 4) & 0x0f, (p_wifi_info[wifi_idx].mac[1] >> 0) & 0x0f, \
-                   (p_wifi_info[wifi_idx].mac[2] >> 4) & 0x0f, (p_wifi_info[wifi_idx].mac[2] >> 0) & 0x0f, \
-                   (p_wifi_info[wifi_idx].mac[3] >> 4) & 0x0f, (p_wifi_info[wifi_idx].mac[3] >> 0) & 0x0f, \
-                   (p_wifi_info[wifi_idx].mac[4] >> 4) & 0x0f, (p_wifi_info[wifi_idx].mac[4] >> 0) & 0x0f, \
-                   (p_wifi_info[wifi_idx].mac[5] >> 4) & 0x0f, (p_wifi_info[wifi_idx].mac[5] >> 0) & 0x0f);
-                locater_int_to_code86(mac_rssi, sizeof(char), (char *)&p_item->rssi, 1);
-                ///< 计算下一次偏移
-                p_offs += sizeof(struct locator_uart_location_wifi_item_s);
-                location_count++;
-            }
-        }
+        location_count = 0;
 
-        ///< 获取定位
+        ///< 获取GPS定位
         memset(&location_info, 0, sizeof(location_info));
         location_res = locater_uart_get_location_info(&location_info);
         if (!location_res) {
             p_location_gps = (struct locator_uart_protocol_dev_upload_location_gps_fmt_s *)p_offs;
             // 定位数据类型是31
             p_location_gps->type = 0x31;
+            time_stamp = time(NULL);
+            locater_assert(time_stamp < LOCATER_SERVER_TIME);
+            time_stamp -= LOCATER_SERVER_TIME;
             printf("location_misc, gps_time_stamp: %ld, local_time_stamp\n", location_info.time_stamp, time_stamp);
             locater_int_to_code86(time_stamp, sizeof(int), (char *)&p_location_gps->time_stamp, 4);
 
@@ -3180,6 +3320,105 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(6) {
             p_offs += sizeof(struct locator_uart_protocol_dev_upload_location_gps_fmt_s);
             location_count++;
         }
+
+        memset(&serving_cell_info_array, 0, sizeof(serving_cell_info_array));
+        sering_cell_res = locater_uart_get_serving_cell(&serving_cell_info_array, ARRAY_LEN(serving_cell_info_array), &serving_cell_final_count);
+        if (!sering_cell_res) {
+            p_location_lbs = (struct locator_uart_protocol_dev_upload_location_lbs_fmt_s *)p_offs;
+            // 定位数据类型是0x33
+            p_location_lbs->type = 0x33;
+            // 时间戳
+            time_stamp = time(NULL);
+            locater_assert(time_stamp < LOCATER_SERVER_TIME);
+            time_stamp -= LOCATER_SERVER_TIME;
+            locater_int_to_code86(time_stamp, sizeof(int), (char *)&p_location_lbs->time_stamp, 4);
+            // 个数
+            locater_int_to_code86(serving_cell_final_count, 1, &p_location_lbs->base_stationst_count, 1);
+            // 更新offset值
+            p_offs = (char *)p_location_lbs->data;
+            for (lbs_idx = 0; lbs_idx < serving_cell_final_count; lbs_idx++) {
+                if (!strncmp(serving_cell_info_array[lbs_idx].mode, "LTE", 3)) {
+                    printf("location_misc, lte.state: %s\n", serving_cell_info_array[lbs_idx].lte_mode.state);
+                    printf("location_misc, lte.is_tdd: %s\n", serving_cell_info_array[lbs_idx].lte_mode.is_tdd);
+                    printf("location_misc, lte.mcc: %d\n", serving_cell_info_array[lbs_idx].lte_mode.mcc);
+                    printf("location_misc, lte.mnc: %d\n", serving_cell_info_array[lbs_idx].lte_mode.mnc);
+                    printf("location_misc, lte.cell_id: %d(0x%08x)\n", serving_cell_info_array[lbs_idx].lte_mode.cell_id, serving_cell_info_array[lbs_idx].lte_mode.cell_id);
+                    printf("location_misc, lte.pci: %d\n", serving_cell_info_array[lbs_idx].lte_mode.pci);
+                    printf("location_misc, lte.earfcn: %d\n", serving_cell_info_array[lbs_idx].lte_mode.earfcn);
+                    printf("location_misc, lte.freq_band_ind: %d\n", serving_cell_info_array[lbs_idx].lte_mode.freq_band_ind);
+                    printf("location_misc, lte.dl_bandwidth: %d\n", serving_cell_info_array[lbs_idx].lte_mode.dl_bandwidth);
+                    printf("location_misc, lte.ul_bandwidth: %d\n", serving_cell_info_array[lbs_idx].lte_mode.ul_bandwidth);
+                    printf("location_misc, lte.tac: %d\n", serving_cell_info_array[lbs_idx].lte_mode.tac);
+                    printf("location_misc, lte.rsrp: %d\n", serving_cell_info_array[lbs_idx].lte_mode.rsrp);
+                    printf("location_misc, lte.rsrq: %d\n", serving_cell_info_array[lbs_idx].lte_mode.rsrq);
+                    printf("location_misc, lte.rssi: %d\n", serving_cell_info_array[lbs_idx].lte_mode.rssi);
+                    printf("location_misc, lte.sinr: %d\n", serving_cell_info_array[lbs_idx].lte_mode.sinr);
+                    printf("location_misc, lte.srxlev: %d\n", serving_cell_info_array[lbs_idx].lte_mode.srxlev);
+                    p_location_lbs_lte = (struct locator_uart_protocol_dev_upload_location_lbs_lte_fmt_s *)p_offs;
+                    locater_int_to_code86(serving_cell_info_array[lbs_idx].lte_mode.mcc, 2, (char *)&p_location_lbs_lte->mcc, 2);
+                    locater_int_to_code86(serving_cell_info_array[lbs_idx].lte_mode.mnc, 2, (char *)&p_location_lbs_lte->mnc, 2);
+                    locater_int_to_code86(serving_cell_info_array[lbs_idx].lte_mode.tac, 2, (char *)&p_location_lbs_lte->lac, 2);
+                    locater_int_to_code86(serving_cell_info_array[lbs_idx].lte_mode.cell_id, 4, (char *)&p_location_lbs_lte->cell_id, 4);
+                    p_offs = (char *)(p_location_lbs_lte + sizeof(struct locator_uart_protocol_dev_upload_location_lbs_lte_fmt_s));
+                }
+            }
+            location_count++;
+        }
+
+        ///< 获取WIFI信号
+        if (location_count) {
+            printf("location_misc, skip_wifi_location_info\n");
+            goto skip_wifi_location_info;
+        }
+        wifi_scan();
+        wifi_cnt = wifi_get_info(&p_wifi_info);
+        printf("location_misc, detect wifi_cnt: %d\n", wifi_cnt);
+        if (wifi_cnt) {
+            p_location_wifi = (struct locator_uart_protocol_dev_upload_location_wifi_fmt_s *)p_offs;
+            p_location_wifi->type = 0x32;
+            locater_int_to_code86(wifi_cnt, sizeof(char), (char *)&p_location_wifi->count, 1);
+            time_stamp = time(NULL);
+            locater_assert(time_stamp < LOCATER_SERVER_TIME);
+            time_stamp -= LOCATER_SERVER_TIME;
+            locater_int_to_code86(time_stamp, sizeof(int), (char *)&p_location_wifi->time_stamp, 4);
+            p_offs = p_location_wifi->info->mac;
+
+            // 排序
+            locater_assert(wifi_cnt > sizeof(bubble_sort_info));
+            memset(&bubble_sort_info, 0, sizeof(bubble_sort_info));
+            for (wifi_idx = 0; wifi_idx < wifi_cnt; wifi_idx++) {
+                bubble_sort_info[wifi_idx].val = p_wifi_info[wifi_idx].rssi;
+                bubble_sort_info[wifi_idx].p_prv_data = (void *)&p_wifi_info[wifi_idx];
+            }
+            locater_uart_app_bubble_sort(&bubble_sort_info, wifi_cnt);
+
+            final_wifi_cnt = wifi_cnt > 8 ? 8 : wifi_cnt;
+            for (wifi_idx = 0; wifi_idx < final_wifi_cnt; wifi_idx++) {
+                struct locator_uart_location_wifi_item_s *p_item = \
+                    (struct locator_uart_location_wifi_item_s *)p_offs;
+                STRU_WIFI_INFO *p_wifi_info_tmp = (STRU_WIFI_INFO *)bubble_sort_info[wifi_idx].p_prv_data;
+                ///< 按协议。取反+100 范围0-216
+                mac_rssi = p_wifi_info_tmp->rssi < 0 ? -(p_wifi_info_tmp->rssi) : p_wifi_info_tmp->rssi;
+                mac_rssi += 70;
+                printf("location_misc, wifi_idx: %04d, mac: %02x-%02x-%02x-%02x-%02x-%02x, "
+                    "rssi: %d(dec: %d, hex: 0x%02x), ssid: %s\r\n", wifi_idx, \
+                    p_wifi_info_tmp->mac[0], p_wifi_info_tmp->mac[1], p_wifi_info_tmp->mac[2], p_wifi_info_tmp->mac[3], \
+                    p_wifi_info_tmp->mac[4], p_wifi_info_tmp->mac[5], \
+                    p_wifi_info_tmp->rssi, mac_rssi, mac_rssi, p_wifi_info_tmp->ssid);
+                sprintf(p_item->mac, "%x%x:%x%x:%x%x:%x%x:%x%x:%x%x", \
+                   (p_wifi_info_tmp->mac[0] >> 4) & 0x0f, (p_wifi_info_tmp->mac[0] >> 0) & 0x0f, \
+                   (p_wifi_info_tmp->mac[1] >> 4) & 0x0f, (p_wifi_info_tmp->mac[1] >> 0) & 0x0f, \
+                   (p_wifi_info_tmp->mac[2] >> 4) & 0x0f, (p_wifi_info_tmp->mac[2] >> 0) & 0x0f, \
+                   (p_wifi_info_tmp->mac[3] >> 4) & 0x0f, (p_wifi_info_tmp->mac[3] >> 0) & 0x0f, \
+                   (p_wifi_info_tmp->mac[4] >> 4) & 0x0f, (p_wifi_info_tmp->mac[4] >> 0) & 0x0f, \
+                   (p_wifi_info_tmp->mac[5] >> 4) & 0x0f, (p_wifi_info_tmp->mac[5] >> 0) & 0x0f);
+                locater_int_to_code86(mac_rssi, sizeof(char), (char *)&p_item->rssi, 1);
+                ///< 计算下一次偏移
+                p_offs += sizeof(struct locator_uart_location_wifi_item_s);
+            }
+            location_count++;
+        }
+skip_wifi_location_info:
 
         if (!location_count) {
             v_task_delay(8000 / port_tick_period_ms);
@@ -3413,6 +3652,7 @@ static int locater_uart_app_set_ota_conf(char *p_wifi_mac_password_str, char *p_
 
 static void locater_uart_app_ota_misc_task(void *arg)
 {
+    int ret = 0;
     unsigned int step = 0, step_bakup = 0;
 	STRU_WIFI_INFO *p_wifi_info  = NULL;
     unsigned int wifi_cnt = 0, wifi_idx = 0;
@@ -3420,16 +3660,26 @@ static void locater_uart_app_ota_misc_task(void *arg)
     unsigned int qos = 0, remain = 0;
     unsigned int i = 0, client_handle = 0;
     unsigned int locater_uart_ota_stop_task_count_bak = 0;
+    unsigned int curr_time_stamp = 0;
+    unsigned int update_time_last_timestamp = 0, update_time_curr_timestamp = 0;
 
     while (true) {
-    // 开机启动，检查OTA的状态
 LOCATOR_UART_FSM_COM_STEP_ENTRY(0) {
-        if (s_is_locater_uart_need_ota)
+        curr_time_stamp = time(NULL);
+
+        ///< 检查OTA的状态
+        if (s_is_locater_uart_need_ota) {
             step = 1;
-        else {
-            v_task_delay(1000 / port_tick_rate_ms);
             continue;
         }
+
+        ///< 定时更新时间
+        if (curr_time_stamp - update_time_last_timestamp >= (30 * 60)) {
+            step = 10;
+            continue;
+        }
+
+        v_task_delay(1000 / port_tick_rate_ms);
       }
 
     // 广播所有任务停止
@@ -3452,6 +3702,38 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(2) {
         }
 
         sys_ota_set_url(s_is_locater_uart_ota_firmware_url);
+        step = 0;
+      }
+
+LOCATOR_UART_FSM_COM_STEP_ENTRY(10) {
+        struct timeval stime = {0};
+        struct locater_local_time_info_fmt_s local_time_info = {0};
+        struct tm info = {0};
+        time_t x;
+        
+        update_time_last_timestamp = curr_time_stamp;
+        ///< 获取SNTP时间
+        ret = locater_uart_get_sntp_time(&local_time_info);
+        locater_assert(ret);
+        ///< 配置时区
+        setenv("TZ", "CST-8", 1);
+        tzset();
+
+        info.tm_year = local_time_info.year - 1900;
+        info.tm_mon = local_time_info.month - 1;
+        info.tm_mday = local_time_info.day;
+        info.tm_hour = local_time_info.hour;
+        info.tm_min = local_time_info.minute;
+        info.tm_sec = local_time_info.second;
+        info.tm_isdst = -1;
+        update_time_curr_timestamp = mktime(&info);
+        printf("app_misc, time_stamp from 1900: %u\n", update_time_curr_timestamp);
+        // 设置本地时间
+        stime.tv_sec = update_time_curr_timestamp;
+        settimeofday(&stime, NULL);
+        // 获取本地时间
+        time(&x);
+        printf("app_misc, time: %u, x: %u\n", time(NULL), x);
         step = 0;
       }
     }

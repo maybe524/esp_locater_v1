@@ -153,4 +153,70 @@ typedef struct locater_local_time_info_fmt_s {
     unsigned int second;
 } locater_local_time_info_fmt_t;
 
+typedef struct locater_serving_cell_info_fmt_s {
+    char mode[32];
+    union {
+        // +QENG: "servingcell",<state>,"LTE",<is_tdd>,<MCC>,<
+        // MNC>,<cellID>,<PCI>,<EARFCN>,<freq_band_ind>,<UL_
+        // bandwidth>,<DL_bandwidth>,<TAC>,<RSRP>,<RSRQ>,<
+        // RSSI>,<SINR>,<srxlev>
+        struct {
+            char state[32];
+            char is_tdd[32];
+            int mcc;
+            int mnc;
+            unsigned int cell_id;
+            int pci;
+            int earfcn;
+            int freq_band_ind;
+            int ul_bandwidth;
+            int dl_bandwidth;
+            int tac;
+            int rsrp;
+            int rsrq;
+            int rssi;
+            int sinr;
+            int srxlev;
+        } lte_mode;
+
+        // +QENG: "servingcell",<state>,"WCDMA",<MCC>,<MN
+        // C>,<LAC>,<cellID>,<UARFCN>,<PSC>,<RAC>,<RSCP>,<
+        // ecno>,-,-,-,-,-
+        struct {
+            char state[32];
+            int mcc;
+            int mnc;
+            int lac;
+            unsigned int cell_id;
+            int uarfcn;
+            int psc;
+            int rac;
+            int rscp;
+            int ecno;
+        } wcdma_mode;
+
+        // +QENG: "servingcell",<state>,"GSM",<MCC>,<MNC>,<L
+        // AC>,<cellID>,<BSIC>,<ARFCN>,<GSM_band>,<rxlev>,<T
+        // X_power>,<rla>,<DRX>,<c1>,<c2>,<GPRS_support>,-,-,-,
+        // -,-,-,-,-,-,"-"
+        struct {
+            char state[32];
+            int mcc;
+            int mnc;
+            int lac;
+            unsigned int cell_id;
+            int bsic;
+            int arfcn;
+            int gsm_band;
+            int gsm_rxlev;
+            int tx_power;
+            int rla;
+            int drx;
+            int c1;
+            int c2;
+            int gprs_support;
+        } gsm_mode;
+    };
+} locater_serving_cell_info_fmt_t;
+
 int locater_uart_init(void);
