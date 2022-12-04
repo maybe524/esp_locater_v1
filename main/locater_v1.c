@@ -46,6 +46,7 @@ static char *p_serial = "QAZWSXQAZ";
 static bool s_is_locater_uart_need_ota = false;
 static bool s_is_locater_uart_ota_broadcast_stop_task = false;
 static unsigned s_locater_uart_ota_stop_task_count = 0;
+static char s_is_locater_uart_ota_app_id[16] = {0};
 static char s_is_locater_uart_ota_wifi_mac[32] = {0};
 static char s_is_locater_uart_ota_wifi_password[32] = {0};
 static char s_is_locater_uart_ota_firmware_url[1024] = {0};
@@ -3621,6 +3622,7 @@ static int locater_uart_app_set_ota_conf(char *p_wifi_mac_password_str, char *p_
     struct locator_uart_protocol_app_set_ota_conf_payload_fmt_s *p_url = \
             (struct locator_uart_protocol_app_set_ota_conf_payload_fmt_s *)p_mqtt_payload;
     char *p_mac = NULL;
+	int len = 0;
 
     printf("app_set_ota_config, start\n");
 
@@ -3641,12 +3643,48 @@ static int locater_uart_app_set_ota_conf(char *p_wifi_mac_password_str, char *p_
     // 获取WIFI的密码
     p_mac += 17;
     memset(s_is_locater_uart_ota_wifi_password, 0, sizeof(s_is_locater_uart_ota_wifi_password));
-    strncpy(s_is_locater_uart_ota_wifi_password, p_mac, 17);
+	len = 0;
+	// wifi password max length = 16
+	while(len <= 16 && p_mac[len] != '\0' && p_mac[len] != '"'){
+		s_is_locater_uart_ota_wifi_password[len] = p_mac[len];
+		len++;
+		//printf("len: %d\n", len);
+	}
+	printf("password len: %d\n", len);
+	if (s_is_locater_uart_ota_wifi_password[len - 1] == 0x4A) // 'J'
+	{
+		printf("s_is_locater_uart_ota_wifi_password[%d - 1] = 'J'\n", len);
+		s_is_locater_uart_ota_wifi_password[len - 1] = 0;
+	}
+    //strncpy(s_is_locater_uart_ota_wifi_password, p_mac, 17);
+
+	printf("password len: %d\n", strnlen(s_is_locater_uart_ota_wifi_password, 31));
 
     // 获取固件的URL
     memset(s_is_locater_uart_ota_firmware_url, 0, sizeof(s_is_locater_uart_ota_firmware_url));
-    strncpy(s_is_locater_uart_ota_wifi_password, p_url->url, p_url->url_len);
-
+	memset(s_is_locater_uart_ota_app_id, 0, sizeof(s_is_locater_uart_ota_app_id));
+	memcpy(s_is_locater_uart_ota_app_id, p_url->url+1, 4); // skip '"'
+	p_mac = strstr(p_url->url, "http:");
+	if (p_mac){
+		int str_len = strnlen(p_mac, 128);
+		if (str_len > 0)
+		{
+			if (p_mac[str_len - 1] == '"')
+				str_len -= 1;
+			strncpy(s_is_locater_uart_ota_firmware_url, p_mac, str_len);
+		}
+		else
+		{
+			strncpy(s_is_locater_uart_ota_firmware_url, p_url->url, p_url->url_len);
+		}
+	}
+	else{
+    	strncpy(s_is_locater_uart_ota_firmware_url, p_url->url, p_url->url_len);
+	}
+	printf("[%s %d] app_id(%02hhx%02hhx%02hhx%02hhx) firmware_url(%s) p_mac(%s) len(%d)\n", __func__, __LINE__, 
+		s_is_locater_uart_ota_app_id[0], s_is_locater_uart_ota_app_id[1], 
+		s_is_locater_uart_ota_app_id[2], s_is_locater_uart_ota_app_id[3], 
+		s_is_locater_uart_ota_firmware_url, p_mac, p_url->url_len);
     return 0;
 }
 
@@ -3700,8 +3738,46 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(2) {
             v_task_delay(1000 / port_tick_rate_ms);
             continue;
         }
-
-        sys_ota_set_url(s_is_locater_uart_ota_firmware_url);
+		printf("[%s %d] firmware_url(%s)\n", __func__, __LINE__, s_is_locater_uart_ota_firmware_url);
+		wifi_init();
+		wifi_scan();
+		STRU_WIFI_INFO *ap_info = NULL;
+		int ap_ret = wifi_get_info(&ap_info);
+		printf("[%s %d] wifi_get_ap ret(%d)\n", __func__, __LINE__, ap_ret);
+		if (ap_info)
+		{
+			int  idx = 0;
+			char mac[16] = {0};
+			int i = 0;
+			for (int i = 0; i < 17; i++)
+			{
+				if (s_is_locater_uart_ota_wifi_mac[i] != 0x3A) // ':'
+				{
+					mac[idx++] = s_is_locater_uart_ota_wifi_mac[i];
+				}
+			}
+			printf("wifi_mac(%s) -> (%s)\n", s_is_locater_uart_ota_wifi_mac, mac);
+			// 
+			for (i = 0; i < DEFAULT_SCAN_LIST_SIZE; i++)
+			{
+				printf("AP(%d) ssid(%s) rssi(%d) mac(%s) channel(%d)\n", i, ap_info[i].ssid, ap_info[i].rssi, ap_info[i].mac, ap_info[i].channel);
+			}  
+			for (i = 0; i < DEFAULT_SCAN_LIST_SIZE; i++)
+			{
+				if (0 == strncmp(ap_info[i].mac, mac, 12))
+				{
+					strncpy(wifi_name, ap_info[i].ssid, sizeof(wifi_name)-1);
+					printf("Match AP(%d) ssid(%s) rssi(%d) mac(%s) channel(%d)\n", i, ap_info[i].ssid, ap_info[i].rssi, ap_info[i].mac, ap_info[i].channel);
+					break;
+				}
+			}
+		}
+		printf("[%s %d] set wifi_set_user_pwd(%s %s)\n", __func__, __LINE__, wifi_name, s_is_locater_uart_ota_wifi_password);
+		wifi_set_user_pwd(wifi_name, s_is_locater_uart_ota_wifi_password);
+		printf("[%s %d] before sys_ota_set_url(%s)\n", __func__, __LINE__, s_is_locater_uart_ota_firmware_url);
+		sys_ota_set_url(s_is_locater_uart_ota_firmware_url);
+		sys_ota();
+        //sys_ota_set_url(s_is_locater_uart_ota_firmware_url);
         step = 0;
       }
 
@@ -4122,32 +4198,32 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(3) {
         *  [4] +QMTPING: <client_idx>,<result>当 MQTT 链层状态变化时，客户端会关闭MQTT 连接并上报此 URC。
         */
         if (!strncmp(uart_event->content, "+QMTRECV:", 9)) {
-            split_count = locater_uart_split_str_bychar(uart_event->content, ",:", \
+            split_count = locater_uart_split_str_bychar(&uart_event->content[9], ",", \
                     split_array, ARRAY_LEN(split_array));
             for (split_index = 0; split_index < split_count; split_index++) {
                 printf("main_event_centre, elem_%02d: %s\n", split_index, split_array[split_index].data);
             }
 
-            if (split_count == 3) {
+            if (split_count == 2) {
                 printf("main_event_centre, detect msg type: 3\n");
-                client_idx = atoi(split_array[1].data);
-                recv_id = atoi(split_array[2].data);
+                client_idx = atoi(split_array[0].data);
+                recv_id = atoi(split_array[1].data);
+            }
+            else if (split_count == 4) {
+                printf("main_event_centre, detect msg type: 2, no payload len\n");
+                client_idx = atoi(split_array[0].data);
+                msg_id = atoi(split_array[1].data);
+                p_topic = split_array[2].data;
+                payload_len = 0;
+                p_payload = split_array[3].data;
             }
             else if (split_count == 5) {
-                printf("main_event_centre, detect msg type: 2, no payload len\n");
-                client_idx = atoi(split_array[1].data);
-                msg_id = atoi(split_array[2].data);
-                p_topic = split_array[3].data;
-                payload_len = 0;
-                p_payload = split_array[4].data;
-            }
-            else if (split_count == 6) {
                 printf("main_event_centre, detect msg type: 1, with payload len\n");
-                client_idx = atoi(split_array[1].data);
-                msg_id = atoi(split_array[2].data);
-                p_topic = split_array[3].data;
-                payload_len = split_array[4].data;
-                p_payload = split_array[5].data;
+                client_idx = atoi(split_array[0].data);
+                msg_id = atoi(split_array[1].data);
+                p_topic = split_array[2].data;
+                payload_len = split_array[3].data;
+                p_payload = split_array[4].data;
             }
 
             // 解析这个消息内容，APP上线/下线通知
@@ -4245,9 +4321,10 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(3) {
                 continue;
             }
 
-            // 11.1，OTA升级，主题的随后一个字节为J时，认为是OTA升级
+            // 11.1，OTA升级，主题的随后一个字节为J时，认为是OTA升级: 注意topic包含双引号如"XYZXYZXYZ/a8:6b:7c:ea:90:a6LDM601601J"
             str_len = strlen(p_topic);
-            if (str_len >= 1 && p_topic[str_len - 1] == 'J') {
+			printf("[%s %d] topic(%s) len(%d)\n", __func__, __LINE__, p_topic, str_len);
+            if (str_len >= 1 && p_topic[str_len - 2] == 'J') {
                 printf("main_event_centre, device ota command\n");
                 locater_uart_app_set_ota_conf(p_topic, p_payload);
                 s_is_locater_uart_need_ota = true;
@@ -4269,16 +4346,41 @@ LOCATOR_UART_FSM_COM_STEP_ENTRY(3) {
                 locater_uart_app_set_enclosure_ext(p_payload);
                 continue;
             }
-
+			// 17.1，重启：1R
+			// 17.2，关机：2R
+			// 17.3，恢复设置：3R
+            str_len = strlen(p_topic);
+			printf("[%s %d] topic(%s) len(%d)\n", __func__, __LINE__, p_topic, str_len);
+            if (str_len >= 1 && p_topic[str_len - 2] == 'R') {
+				if (p_topic[str_len - 3] == '1')
+				{
+					printf("main_event_centre, device reboot command\n");
+					esp_restart();
+				}
+				else if (p_topic[str_len - 3] == '2')
+				{
+					printf("main_event_centre, device power off command\n");
+				}
+				else if (p_topic[str_len - 3] == '3')
+				{
+					printf("main_event_centre, device factory reset command\n");
+				}
+				else
+				{
+					printf("main_event_centre, device unknown command\n");
+				}
+                continue;
+            }
+			printf("[%s %d] topic(%s) len(%d): comand: %c%c\n", __func__, __LINE__, p_topic, str_len, p_topic[str_len-2], p_topic[str_len-1]);
         }
         else if (!strncmp(uart_event->content, "+QMTSTAT:", 9)) {
-            split_count = locater_uart_split_str_bychar(uart_event->content, ",:", split_array, \
-                    ARRAY_LEN(atres_array));
+            split_count = locater_uart_split_str_bychar(&uart_event->content[9], ",", split_array, \
+                    ARRAY_LEN(split_array));
             for (split_index = 0; split_index < split_count; split_index++) {
                 printf("main_event_centre, elem_%02d: %s\n", split_index, split_array[split_index].data);
             }
-            client_idx = atoi(split_array[1].data);
-            err_code = atoi(split_array[2].data);
+            client_idx = atoi(split_array[0].data);
+            err_code = atoi(split_array[1].data);
         }
         else {
             printf("main_event_centre, no msg %04d!\n", retry_cnt);
